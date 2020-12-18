@@ -27,6 +27,14 @@ typedef struct _Queue {
 
 int foundFiles;
 
+Queue* newQueue() {
+    Queue *queue = malloc(sizeof(Queue));
+    queue->size = 0;
+    queue->first = NULL;
+    queue->last = NULL;
+    return queue;
+}
+
 /**
  * Add string item to queue
  */
@@ -198,7 +206,7 @@ void handleDirectory(char *path, char *searchTerm, Queue *queue) {
 
     // Close directory
     closedir(dir);
-    if (errno == 0) {
+    if (errno != 0) {
         printf("failed reading dir %s\n", path);
         exit(0);
     }
@@ -226,10 +234,7 @@ int main(int c, char *args[]) {
 
     threads = malloc(sizeof(pthread_t) * parallelism);
 
-    Queue *queue = malloc(sizeof(Queue));
-    queue->size = 0;
-    queue->first = NULL;
-    queue->last = NULL;
+    Queue *queue = newQueue();
     enQueue(queue, rootDir);
 
     while ((path = deQueue(queue)) != NULL /* && all threads are waiting */) {
