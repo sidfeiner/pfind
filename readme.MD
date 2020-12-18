@@ -1,5 +1,5 @@
 # pfind
-#### Personal step
+#### Personal steps
 First implement pfind without parallelism. Once it works, check for memort leaks by first compiling 
 with `-g` flag and then running valgrind:
 ```
