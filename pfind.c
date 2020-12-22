@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 #include <pthread.h>
 #include <dirent.h>
+#include <stdatomic.h>
 
 #define T_UNKNOWN 0
 #define T_FILE 1
@@ -14,20 +15,22 @@
 
 typedef struct dirent dirent;
 
-typedef struct _QueueItem {
+typedef struct queueItem {
     char *value;
-    struct _QueueItem *next;
+    struct queueItem *next;
 } QueueItem;
 
-typedef struct _Queue {
+typedef struct queue {
     int size;
     QueueItem *first;
     QueueItem *last;
 } Queue;
 
-int foundFiles;
 
-Queue* newQueue() {
+/**
+ * Allocate memory for queue and initiate value
+ */
+Queue *newQueue() {
     Queue *queue = malloc(sizeof(Queue));
     queue->size = 0;
     queue->first = NULL;
@@ -35,41 +38,136 @@ Queue* newQueue() {
     return queue;
 }
 
+Queue *queue;
+pthread_mutex_t queueLockLock;
+pthread_mutex_t queueItemsLock;
+pthread_rwlock_t queueSizeLock;
+
+pthread_cond_t queueConsumableCond;
+pthread_cond_t queueProducableCond;
+atomic_int foundFiles;
+atomic_int runningThreads;
+atomic_int failedThreads;
+
 /**
- * Add string item to queue
+ * Use ReadLock for queue's size
  */
-void enQueue(Queue *q, char *path) {
-    QueueItem *qItem = malloc(sizeof(QueueItem));
-    qItem->next = NULL;
-    qItem->value = path;
-    if (q->size == 0) {
-        q->first = qItem;
-    } else {
-        q->last->next = qItem;
-    }
-    q->last = qItem;
-    q->size++;
+void lockQueueSize() {
+    printf("locking queue size\n");
+    pthread_rwlock_wrlock(&queueSizeLock);
 }
 
 /**
- * Return first item in queue, NULL if empty
+ * Unlock ReadLock for queue's size
  */
-char *deQueue(Queue *q) {
+void unlockQueueSize() {
+    printf("unlocking queue size\n");
+    pthread_rwlock_wrlock(&queueSizeLock);
+}
+
+/**
+ * Lock the queue (all fields)
+ */
+void lockQueue() {
+    printf("locking queue lock\n");
+    pthread_mutex_lock(&queueLockLock);
+    printf("locking queue items\n");
+    pthread_mutex_lock(&queueItemsLock);
+    lockQueueSize();
+}
+
+/**
+ * Unlock queue
+ */
+void unlockQueue() {
+    printf("unlocking queue items\n");
+    pthread_mutex_unlock(&queueItemsLock);
+    unlockQueueSize();
+    printf("unlocking queue lock\n");
+    pthread_mutex_unlock(&queueLockLock);
+}
+
+
+/**
+ * return amount of items in queue
+ */
+int unsafeGetQueueSize() {
+    return queue->size;
+}
+
+/**
+ * Safely return the amount of items in queue (lock only queue's size)
+ */
+int getQueueSize() {
+    lockQueueSize();
+    int size = unsafeGetQueueSize();
+    unlockQueueSize();
+    return size;
+}
+
+/**
+ * Add string item to queue
+ */
+void unsafeEnQueue(char *str) {
+    QueueItem *qItem = malloc(sizeof(QueueItem));
+    qItem->next = NULL;
+    qItem->value = str;
+    if (queue->size == 0) {
+        queue->first = qItem;
+    } else {
+        queue->last->next = qItem;
+    }
+    queue->last = qItem;
+    queue->size++;
+    pthread_cond_signal(&queueConsumableCond);
+}
+
+/**
+ *  Add item to queue
+ */
+void enQueue(char *str) {
+    printf("enqueuing...\n");
+    lockQueue();
+    unsafeEnQueue(str);
+    unlockQueue();
+    printf("done queueing...\n");
+}
+
+/**
+ * return first item in queue, NULL if empty
+ */
+char *unsafeDeQueue() {
     char *value;
     QueueItem *qItem;
-    if (q->size == 0) {
+    if (queue->size == 0) {
         return NULL;
     }
-    qItem = q->first;
+    qItem = queue->first;
     value = qItem->value;
-    q->first = qItem->next;
-    if (q->size == 1) {
-        q->last = NULL;
+    queue->first = qItem->next;
+    if (queue->size == 1) {
+        queue->last = NULL;
     }
-    q->size -= 1;
+    queue->size -= 1;
     free(qItem);
     return value;
+}
 
+/**
+ * Safely pop and return first item in queue, NULL if empty
+ */
+char *deQueue() {
+    printf("dequeueing...\n");
+    lockQueue();
+    while (unsafeGetQueueSize() == 0) {
+        printf("running cond_wait\n");
+        pthread_cond_wait(&queueConsumableCond, &queueItemsLock);
+    }
+    char *path = unsafeDeQueue();
+    pthread_cond_signal(&queueProducableCond);
+    unlockQueue();
+    printf("done dequeueing\n");
+    return path;
 }
 
 /**
@@ -115,14 +213,6 @@ int isDir(char *path) {
     return getTypeFromPath(path) == T_DIR;
 }
 
-int isLink(char *path) {
-    return getTypeFromPath(path) == T_LINK;
-}
-
-int isFile(char *path) {
-    return getTypeFromPath(path) == T_FILE;
-}
-
 /**
  * @param dir directory in string
  * @return string with final directory, NULL if path isn't a directory
@@ -134,6 +224,11 @@ char *parseRootDir(char *dir) {
         return rootDir;
     }
     return NULL;
+}
+
+void killThread() {
+    failedThreads++;
+    pthread_exit(NULL);
 }
 
 /**
@@ -158,13 +253,14 @@ char *pathJoin(char *dir, char *entry) {
  * This function handles the entry and adds it to the queue if it's a directory, ignores it if it's a symbolic link
  * and if it's a regular file, matches it against our searchTerm and prints the full path if it's a match.
  */
-void handleEntry(char *dir, dirent *entry, char *searchTerm, Queue *queue) {
+void handleEntry(char *dir, dirent *entry, char *searchTerm) {
     char *newPath;
+    printf("handling entry: %s/%s\n", dir, entry->d_name);
     if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
         newPath = pathJoin(dir, entry->d_name);
         switch (getTypeFromDirent(entry)) {
             case T_DIR:
-                enQueue(queue, newPath);
+                enQueue(newPath);
                 break;
             case T_LINK:
                 break;
@@ -188,32 +284,53 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm, Queue *queue) {
  *
  * Handle directory by scanning all it's contents and treating every entry according to it's type
  */
-void handleDirectory(char *path, char *searchTerm, Queue *queue) {
+void handleDirectory(char *path, char *searchTerm) {
     DIR *dir;
     dirent *entry;
 
+    printf("handling directory: %s\n", path);
+
     // Open directory
     if ((dir = opendir(path)) == NULL) {
-        printf("Directory %s: Permission denied.\n", path);
+        printf("failed opening dir\n");
         return;
     }
 
     // Reset errno to know why we stopped reading directory entries
     errno = 0;
     while ((entry = readdir(dir)) != NULL) {
-        handleEntry(path, entry, searchTerm, queue);
+        handleEntry(path, entry, searchTerm);
     }
 
     // Close directory
     closedir(dir);
     if (errno != 0) {
         printf("failed reading dir %s\n", path);
-        exit(0);
+        killThread();
     }
 }
 
+void *threadMain(void *searchTerm) {
+    char *path;
+    printf("starting thread main\n");
+    while (1) {
+        path = deQueue();
+        printf("dequeud path: %s\n", path);
+        if (path != NULL) {
+            runningThreads++;
+            handleDirectory(path, (char *) searchTerm);
+            free(path);
+            runningThreads--;
+        }
+        if (runningThreads == 0 && getQueueSize() == 0) {
+            break;
+        }
+    }
+    pthread_exit(NULL);
+}
+
 int main(int c, char *args[]) {
-    char *rootDir, *searchTerm, *path;
+    char *rootDir, *searchTerm;
     int parallelism;
     pthread_t *threads;
 
@@ -232,17 +349,38 @@ int main(int c, char *args[]) {
         exit(1);
     }
 
-    threads = malloc(sizeof(pthread_t) * parallelism);
-
-    Queue *queue = newQueue();
-    enQueue(queue, rootDir);
-
-    while ((path = deQueue(queue)) != NULL /* && all threads are waiting */) {
-        handleDirectory(path, searchTerm, queue);
-        free(path);
+    if ((threads = malloc(sizeof(pthread_t) * parallelism)) == NULL) {
+        printf("failed allocating memory for threads\n");
+        exit(1);
     }
+    pthread_t *limit = threads + parallelism;
+
+
+    pthread_mutex_init(&queueLockLock, NULL);
+    pthread_mutex_init(&queueItemsLock, NULL);
+    pthread_rwlock_init(&queueSizeLock, NULL);
+    pthread_cond_init(&queueProducableCond, NULL);
+    pthread_cond_init(&queueConsumableCond, NULL);
+
+    for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
+        pthread_create(tmpThread, NULL, threadMain, searchTerm);
+    }
+
+    queue = newQueue();
+    unsafeEnQueue(rootDir);
+
+    for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
+        pthread_join(*tmpThread, NULL);
+    }
+
+    pthread_mutex_destroy(&queueItemsLock);
+    pthread_rwlock_destroy(&queueSizeLock);
 
     printf("Done searching, found %d files\n", foundFiles);
     free(queue);
     free(threads);
+
+    if (failedThreads > 0) {
+        exit(1);
+    }
 }
