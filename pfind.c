@@ -31,15 +31,19 @@ typedef struct queue {
 long getNanoTs(void) {
     struct timespec spec;
     clock_gettime(CLOCK_REALTIME, &spec);
-    return (int64_t)(spec.tv_sec) * (int64_t)1000000000 + (int64_t)(spec.tv_nsec);
+    return (int64_t) (spec.tv_sec) * (int64_t) 1000000000 + (int64_t) (spec.tv_nsec);
 }
+
+pthread_mutex_t printLock;
 
 void printWithTs(char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
+    pthread_mutex_lock(&printLock);
     printf("[%d] : %lu : ", pthread_self(), getNanoTs());
     vprintf(fmt, args);
-    va_end( args );
+    pthread_mutex_unlock(&printLock);
+    va_end(args);
 }
 
 /**
@@ -56,12 +60,11 @@ Queue *newQueue() {
 Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLockLock;
-pthread_mutex_t queueItemsLock;
-pthread_rwlock_t queueSizeLock;
 
-pthread_cond_t startCond;
+int parallelism;
 pthread_cond_t queueConsumableCond;
-pthread_cond_t queueProducableCond;
+pthread_cond_t doneInitCond;
+atomic_int createdProcesses;
 atomic_int foundFiles;
 atomic_int runningThreads;
 atomic_int failedThreads;
@@ -69,18 +72,18 @@ atomic_int failedThreads;
 /**
  * Use ReadLock for queue's size
  */
-void lockQueueSize() {
+/*void lockQueueSize() {
     printWithTs("locking queue size\n");
     pthread_rwlock_wrlock(&queueSizeLock);
-}
+}*/
 
 /**
  * Unlock ReadLock for queue's size
  */
-void unlockQueueSize() {
+/*void unlockQueueSize() {
     printWithTs("unlocking queue size\n");
     pthread_rwlock_wrlock(&queueSizeLock);
-}
+}*/
 
 /**
  * Lock the queue (all fields)
@@ -88,19 +91,19 @@ void unlockQueueSize() {
 void lockQueue() {
     printWithTs("locking queue lock\n");
     pthread_mutex_lock(&queueLockLock);
-    printWithTs("locking queue items\n");
-    pthread_mutex_lock(&queueItemsLock);
-    lockQueueSize();
+    //printWithTs("locking queue items\n");
+    //pthread_mutex_lock(&queueItemsLock);
+    //lockQueueSize();
 }
 
 /**
  * Unlock queue
  */
 void unlockQueue() {
-    printWithTs("unlocking queue items\n");
-    pthread_mutex_unlock(&queueItemsLock);
-    unlockQueueSize();
     printWithTs("unlocking queue lock\n");
+    //pthread_mutex_unlock(&queueItemsLock);
+    //unlockQueueSize();
+    //printWithTs("unlocking queue lock\n");
     pthread_mutex_unlock(&queueLockLock);
 }
 
@@ -119,9 +122,11 @@ int unsafeGetQueueSize() {
  * Safely return the amount of items in queue (lock only queue's size)
  */
 int getQueueSize() {
-    lockQueueSize();
+    //lockQueueSize();
+    lockQueue();
     int size = unsafeGetQueueSize();
-    unlockQueueSize();
+    //unlockQueueSize();
+    unlockQueue();
     return size;
 }
 
@@ -139,7 +144,6 @@ void unsafeEnQueue(char *str) {
     }
     queue->last = qItem;
     queue->size++;
-    pthread_cond_signal(&queueConsumableCond);
 }
 
 /**
@@ -154,6 +158,8 @@ void enQueue(char *str) {
     }*/
     unsafeEnQueue(str);
     unlockQueue();
+    printWithTs("signaling queueConsumableCond in enQueue\n");
+    pthread_cond_signal(&queueConsumableCond);
     printWithTs("done queueing...\n");
 }
 
@@ -163,6 +169,7 @@ void enQueue(char *str) {
 char *unsafeDeQueue() {
     char *value;
     QueueItem *qItem;
+    printWithTs("unsafe dequeue...\n");
     if (queue->size == 0) {
         return NULL;
     }
@@ -183,12 +190,11 @@ char *unsafeDeQueue() {
 char *deQueue() {
     printWithTs("dequeueing...\n");
     lockQueue();
-    while (unsafeGetQueueSize() == 0) {
+    while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
         printWithTs("running cond_wait in dequeue\n");
         pthread_cond_wait(&queueConsumableCond, &queueLockLock);
     }
     char *path = unsafeDeQueue();
-    pthread_cond_signal(&queueProducableCond);
     unlockQueue();
     printWithTs("done dequeueing\n");
     return path;
@@ -284,11 +290,14 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
         newPath = pathJoin(dir, entry->d_name);
         switch (getTypeFromDirent(entry)) {
             case T_DIR:
+                printWithTs("found dir, enqueueing %s\n", newPath);
                 enQueue(newPath);
                 break;
             case T_LINK:
             case T_FILE:
+                printWithTs("comparing file name with search term\n");
                 if (strstr(entry->d_name, searchTerm) != NULL) {
+                    printWithTs("found file name with search term\n");
                     foundFiles++;
                     printWithTs("%s\n", newPath);
                 }
@@ -298,6 +307,7 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 printWithTs("unknown type format: %d\n", entry->d_type);
         }
     }
+    printWithTs("done handline entry\n");
 }
 
 /**
@@ -331,12 +341,23 @@ void handleDirectory(char *path, char *searchTerm) {
         printWithTs("failed reading dir %s\n", path);
         killThread();
     }
+    printWithTs("done handling directory: %s\n", path);
 }
 
 void *threadMain(void *searchTerm) {
     char *path;
-    //pthread_cond_wait(&startCond, &startLock);
     printWithTs("starting thread main\n");
+    pthread_mutex_lock(&startLock);
+    printWithTs("waiting for queueConsumableCond\n");
+    createdProcesses++;
+    if (createdProcesses == parallelism) {
+        printWithTs("signaling doneInitCond\n");
+        pthread_cond_signal(&doneInitCond);
+    }
+    printWithTs("waiting for go\n");
+    pthread_cond_wait(&queueConsumableCond, &startLock);
+    printWithTs("received queueConsumableCond\n");
+    pthread_mutex_unlock(&startLock);
     while (1) {
         path = deQueue();
         printWithTs("dequeued path: %s\n", path);
@@ -347,6 +368,8 @@ void *threadMain(void *searchTerm) {
             runningThreads--;
         }
         if (runningThreads == 0 && getQueueSize() == 0) {
+            printWithTs("must break!\n");
+            pthread_cond_broadcast(&queueConsumableCond);
             break;
         }
     }
@@ -355,9 +378,8 @@ void *threadMain(void *searchTerm) {
 
 int main(int c, char *args[]) {
     char *rootDir, *searchTerm;
-    int parallelism;
     pthread_t *threads;
-
+    pthread_mutex_init(&printLock, NULL);
     if (c != 4) {
         printWithTs("wrong amount of arguments given\n");
     }
@@ -379,29 +401,30 @@ int main(int c, char *args[]) {
     }
     pthread_t *limit = threads + parallelism;
 
-
-    pthread_mutex_init(&startLock, NULL);
     pthread_mutex_init(&queueLockLock, NULL);
-    pthread_mutex_init(&queueItemsLock, NULL);
-    pthread_rwlock_init(&queueSizeLock, NULL);
-    pthread_cond_init(&startCond, NULL);
-    pthread_cond_init(&queueProducableCond, NULL);
     pthread_cond_init(&queueConsumableCond, NULL);
+
+    queue = newQueue();
 
     for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
         pthread_create(tmpThread, NULL, threadMain, searchTerm);
     }
 
-    queue = newQueue();
     unsafeEnQueue(rootDir);
-    pthread_cond_broadcast(&startCond);
+
+    pthread_mutex_lock(&startLock);
+    printWithTs("waiting for doneInitCond\n");
+    pthread_cond_wait(&doneInitCond, &startLock);
+    printWithTs("done waiting for doneInitCond, signaling queueConsumableCond\n");
+    pthread_cond_broadcast(&queueConsumableCond);
+    pthread_mutex_unlock(&startLock);
 
     for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
         pthread_join(*tmpThread, NULL);
     }
 
-    pthread_mutex_destroy(&queueItemsLock);
-    pthread_rwlock_destroy(&queueSizeLock);
+//    pthread_mutex_destroy(&queueItemsLock);
+//    pthread_rwlock_destroy(&queueSizeLock);
 
     printWithTs("Done searching, found %d files\n", foundFiles);
     free(queue);
