@@ -32,6 +32,7 @@ typedef struct queue {
 Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLock;
+pthread_rwlock_t rwLock;
 
 int parallelism;
 pthread_cond_t queueConsumableCond;
@@ -84,9 +85,9 @@ int unsafeGetQueueSize() {
  * Safely return the amount of items in queue (lock only queue's size)
  */
 int getQueueSize() {
-    pthread_mutex_lock(&queueLock);
+    pthread_rwlock_rdlock(&rwLock);
     int size = unsafeGetQueueSize();
-    pthread_mutex_unlock(&queueLock);
+    pthread_rwlock_unlock(&rwLock);
     return size;
 }
 
@@ -111,9 +112,9 @@ void unsafeEnQueue(char *str) {
  */
 void enQueue(char *str) {
     printWithTs("enqueuing...\n");
-    pthread_mutex_lock(&queueLock);
+    pthread_rwlock_wrlock(&rwLock);
     unsafeEnQueue(str);
-    pthread_mutex_unlock(&queueLock);
+    pthread_rwlock_unlock(&rwLock);
     printWithTs("signaling queueConsumableCond in enQueue\n");
     pthread_cond_signal(&queueConsumableCond);
     printWithTs("done queueing...\n");
@@ -150,7 +151,9 @@ char *deQueue() {
         printWithTs("running cond_wait in dequeue\n");
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
+    pthread_rwlock_wrlock(&rwLock);
     char *path = unsafeDeQueue();
+    pthread_rwlock_unlock(&rwLock);
     pthread_mutex_unlock(&queueLock);
     printWithTs("done dequeueing\n");
     return path;
@@ -358,7 +361,9 @@ int main(int c, char *args[]) {
     pthread_t *limit = threads + parallelism;
 
     pthread_mutex_init(&queueLock, NULL);
+    pthread_rwlock_init(&rwLock, NULL);
     pthread_cond_init(&queueConsumableCond, NULL);
+    pthread_cond_init(&doneInitCond, NULL);
 
     queue = newQueue();
 
@@ -379,10 +384,14 @@ int main(int c, char *args[]) {
         pthread_join(*tmpThread, NULL);
     }
 
-//    pthread_mutex_destroy(&queueItemsLock);
-//    pthread_rwlock_destroy(&queueSizeLock);
-
     printWithTs("Done searching, found %d files\n", foundFiles);
+
+    pthread_mutex_destroy(&printLock);
+    pthread_mutex_destroy(&queueLock);
+    pthread_rwlock_destroy(&rwLock);
+    pthread_cond_destroy(&queueConsumableCond);
+    pthread_cond_destroy(&doneInitCond);
+
     free(queue);
     free(threads);
 
