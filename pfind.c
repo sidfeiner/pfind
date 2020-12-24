@@ -15,6 +15,7 @@
 #define T_DIR 2
 #define T_LINK 3
 
+
 typedef struct dirent dirent;
 
 typedef struct queueItem {
@@ -27,6 +28,18 @@ typedef struct queue {
     QueueItem *first;
     QueueItem *last;
 } Queue;
+
+Queue *queue;
+pthread_mutex_t startLock;
+pthread_mutex_t queueLockLock;
+
+int parallelism;
+pthread_cond_t queueConsumableCond;
+pthread_cond_t doneInitCond;
+atomic_int createdProcesses;
+atomic_int foundFiles;
+atomic_int runningThreads;
+atomic_int failedThreads;
 
 long getNanoTs(void) {
     struct timespec spec;
@@ -57,57 +70,6 @@ Queue *newQueue() {
     return queue;
 }
 
-Queue *queue;
-pthread_mutex_t startLock;
-pthread_mutex_t queueLockLock;
-
-int parallelism;
-pthread_cond_t queueConsumableCond;
-pthread_cond_t doneInitCond;
-atomic_int createdProcesses;
-atomic_int foundFiles;
-atomic_int runningThreads;
-atomic_int failedThreads;
-
-/**
- * Use ReadLock for queue's size
- */
-/*void lockQueueSize() {
-    printWithTs("locking queue size\n");
-    pthread_rwlock_wrlock(&queueSizeLock);
-}*/
-
-/**
- * Unlock ReadLock for queue's size
- */
-/*void unlockQueueSize() {
-    printWithTs("unlocking queue size\n");
-    pthread_rwlock_wrlock(&queueSizeLock);
-}*/
-
-/**
- * Lock the queue (all fields)
- */
-void lockQueue() {
-    printWithTs("locking queue lock\n");
-    pthread_mutex_lock(&queueLockLock);
-    //printWithTs("locking queue items\n");
-    //pthread_mutex_lock(&queueItemsLock);
-    //lockQueueSize();
-}
-
-/**
- * Unlock queue
- */
-void unlockQueue() {
-    printWithTs("unlocking queue lock\n");
-    //pthread_mutex_unlock(&queueItemsLock);
-    //unlockQueueSize();
-    //printWithTs("unlocking queue lock\n");
-    pthread_mutex_unlock(&queueLockLock);
-}
-
-
 /**
  * return amount of items in queue
  */
@@ -122,11 +84,9 @@ int unsafeGetQueueSize() {
  * Safely return the amount of items in queue (lock only queue's size)
  */
 int getQueueSize() {
-    //lockQueueSize();
-    lockQueue();
+    pthread_mutex_lock(&queueLockLock);
     int size = unsafeGetQueueSize();
-    //unlockQueueSize();
-    unlockQueue();
+    pthread_mutex_unlock(&queueLockLock);
     return size;
 }
 
@@ -151,13 +111,9 @@ void unsafeEnQueue(char *str) {
  */
 void enQueue(char *str) {
     printWithTs("enqueuing...\n");
-    lockQueue();
-    /*while (unsafeGetQueueSize() == 0) {
-        printWithTs("running cond_wait in enqueue\n");
-        pthread_cond_wait(&queueProducableCond, &queueLockLock);
-    }*/
+    pthread_mutex_lock(&queueLockLock);
     unsafeEnQueue(str);
-    unlockQueue();
+    pthread_mutex_unlock(&queueLockLock);
     printWithTs("signaling queueConsumableCond in enQueue\n");
     pthread_cond_signal(&queueConsumableCond);
     printWithTs("done queueing...\n");
@@ -189,13 +145,13 @@ char *unsafeDeQueue() {
  */
 char *deQueue() {
     printWithTs("dequeueing...\n");
-    lockQueue();
+    pthread_mutex_lock(&queueLockLock);
     while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
         printWithTs("running cond_wait in dequeue\n");
         pthread_cond_wait(&queueConsumableCond, &queueLockLock);
     }
     char *path = unsafeDeQueue();
-    unlockQueue();
+    pthread_mutex_unlock(&queueLockLock);
     printWithTs("done dequeueing\n");
     return path;
 }
