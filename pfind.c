@@ -287,7 +287,6 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 enQueue(newPath);
                 break;
             case T_LINK:
-                break;
             case T_FILE:
                 if (strstr(entry->d_name, searchTerm) != NULL) {
                     foundFiles++;
