@@ -75,8 +75,8 @@ Queue *newQueue() {
  * return amount of items in queue
  */
 int unsafeGetQueueSize() {
-        int size = queue->size;
-        return size;
+    int size = queue->size;
+    return size;
 }
 
 /**
@@ -109,11 +109,11 @@ void unsafeEnQueue(char *str) {
  *  Add item to queue
  */
 void enQueue(char *str) {
-        pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&rwLock);
     unsafeEnQueue(str);
     pthread_rwlock_unlock(&rwLock);
-        pthread_cond_signal(&queueConsumableCond);
-    }
+    pthread_cond_signal(&queueConsumableCond);
+}
 
 /**
  * return first item in queue, NULL if empty
@@ -121,7 +121,7 @@ void enQueue(char *str) {
 char *unsafeDeQueue() {
     char *value;
     QueueItem *qItem;
-        if (queue->size == 0) {
+    if (queue->size == 0) {
         return NULL;
     }
     qItem = queue->first;
@@ -139,15 +139,15 @@ char *unsafeDeQueue() {
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
-        pthread_mutex_lock(&queueLock);
+    pthread_mutex_lock(&queueLock);
     while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
-                pthread_cond_wait(&queueConsumableCond, &queueLock);
+        pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
     pthread_mutex_unlock(&queueLock);
     pthread_rwlock_wrlock(&rwLock);
     char *path = unsafeDeQueue();
     pthread_rwlock_unlock(&rwLock);
-        return path;
+    return path;
 }
 
 /**
@@ -241,18 +241,18 @@ int hasReadPermission(char *path) {
  */
 void handleEntry(char *dir, dirent *entry, char *searchTerm) {
     char *newPath;
-        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+    if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
         newPath = pathJoin(dir, entry->d_name);
         switch (getTypeFromDirent(entry)) {
             case T_DIR:
-                                if (hasReadPermission(newPath)) {
+                if (hasReadPermission(newPath)) {
                     enQueue(newPath);
                 }
                 break;
             case T_LINK:
             case T_FILE:
-                                if (strstr(entry->d_name, searchTerm) != NULL) {
-                                        foundFiles++;
+                if (strstr(entry->d_name, searchTerm) != NULL) {
+                    foundFiles++;
                     printf("%s\n", newPath);
                 }
                 free(newPath);
@@ -261,7 +261,7 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 printWithTs("unknown type format: %d\n", entry->d_type);
         }
     }
-    }
+}
 
 /**
  * @param path current directory we're parsing
@@ -274,7 +274,7 @@ void handleDirectory(char *path, char *searchTerm) {
     DIR *dir;
     dirent *entry;
 
-    
+
     // Open directory
     if ((dir = opendir(path)) == NULL) {
         printf("failed opening dir\n");
@@ -293,27 +293,27 @@ void handleDirectory(char *path, char *searchTerm) {
         printf("failed reading dir %s\n", path);
         killThread();
     }
-    }
+}
 
 void *threadMain(void *searchTerm) {
     char *path;
-        pthread_mutex_lock(&startLock);
-        createdProcesses++;
+    pthread_mutex_lock(&startLock);
+    createdProcesses++;
     if (createdProcesses == parallelism) {
-                pthread_cond_signal(&doneInitCond);
+        pthread_cond_signal(&doneInitCond);
     }
-        pthread_cond_wait(&queueConsumableCond, &startLock);
-        pthread_mutex_unlock(&startLock);
+    pthread_cond_wait(&queueConsumableCond, &startLock);
+    pthread_mutex_unlock(&startLock);
     while (1) {
         path = deQueue();
-                if (path != NULL) {
+        if (path != NULL) {
             runningThreads++;
             handleDirectory(path, (char *) searchTerm);
             free(path);
             runningThreads--;
         }
         if (runningThreads == 0 && getQueueSize() == 0) {
-                        pthread_cond_broadcast(&queueConsumableCond);
+            pthread_cond_broadcast(&queueConsumableCond);
             break;
         }
     }
@@ -359,8 +359,8 @@ int main(int c, char *args[]) {
     unsafeEnQueue(rootDir);
 
     pthread_mutex_lock(&startLock);
-        pthread_cond_wait(&doneInitCond, &startLock);
-        pthread_cond_broadcast(&queueConsumableCond);
+    pthread_cond_wait(&doneInitCond, &startLock);
+    pthread_cond_broadcast(&queueConsumableCond);
     pthread_mutex_unlock(&startLock);
 
     for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
