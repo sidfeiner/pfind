@@ -233,6 +233,12 @@ char *pathJoin(char *dir, char *entry) {
     return dst;
 }
 
+int hasReadPermission(char *path) {
+    struct stat s;
+    lstat(path, &s);
+    return (s.st_mode & S_IRUSR) || (s.st_mode & S_IRGRP);
+}
+
 /**
  * @param dir path of current directory
  * @param entry current dir entry
@@ -250,7 +256,9 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
         switch (getTypeFromDirent(entry)) {
             case T_DIR:
                 //printWithTs("found dir, enqueueing %s\n", newPath);
-                enQueue(newPath);
+                if (hasReadPermission(newPath)) {
+                    enQueue(newPath);
+                }
                 break;
             case T_LINK:
             case T_FILE:
