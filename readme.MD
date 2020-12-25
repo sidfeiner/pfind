@@ -20,21 +20,33 @@ debugging it with parallelism 2.
 Add prints EVERYWHERE (especially before / after EVERY lock). To be able to differentiate between different threads easily, 
 you'll need to print the thread ID. To do so, add the following func:
 ```
+long getNanoTs(void) {
+    struct timespec spec;
+    clock_gettime(CLOCK_REALTIME, &spec);
+    return (int64_t) (spec.tv_sec) * (int64_t) 1000000000 + (int64_t) (spec.tv_nsec);
+}
+
 void printWithTs(char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    printf("[%d] : %lu : ", pthread_self(), getNanoTs());
+    printf("[%02x] : %lu : ", pthread_self(), getNanoTs());
     vprintf(fmt, args);
-    va_end( args );
+    va_end(args);
 }
 ```
-And use this INSTEAD of `printf`. This will format the prints in the following format:
+And use this INSTEAD of `printf`. You can use this function also with parameters (just like `printf`, 
+for example `printWithTs("Handling directory: %s", directory)`). This will format the prints in the following format:
 ```
-[21377024] : 1608721687061694000 : unlocking queue size
-[21377024] : 1608721687061697000 : unlocking queue lock
-[21913600] : 1608721687061705000 : locking queue items
-[21913600] : 1608721687061708000 : locking queue size
-[21377024] : 1608721687061715000 : done dequeueing
+[aa7d000] : 1608901474622365000 : locking queue for dequeueing (read/write)
+[aa7d000] : 1608901474622367000 : unlocking queue for dequeueing (read/write)
+[aa7d000] : 1608901474622369000 : done unlocking queue for dequeueing (read/write)
+[aa7d000] : 1608901474622370000 : Handling directory: /Users/sid/Documents/studies/operating-systems/msgslot
+[aa7d000] : 1608901474622449000 : locking queue for enqueueing (read/write)
+[aa7d000] : 1608901474622453000 : unlocking queue for enqueueing (read/write)
+[aa7d000] : 1608901474622455000 : done unlocking queue for enqueueing (read/write)
+[a9fa000] : 1608901474622471000 : locking queue for enqueueing (read/write)
+[a9fa000] : 1608901474622528000 : unlocking queue for enqueueing (read/write)
+[a9fa000] : 1608901474622574000 : done unlocking queue for enqueueing (read/write)
 ```
 [threadId] : timestamp : message
 
