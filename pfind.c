@@ -173,16 +173,16 @@ char *deQueue() {
 #endif
     pthread_mutex_unlock(&queueLock);
 #ifdef DEBUG
-    printWithTs("locking queue for enqueueing (read/write)\n");
+    printWithTs("locking queue for dequeueing (read/write)\n");
 #endif
     pthread_rwlock_wrlock(&rwLock);
     char *path = unsafeDeQueue();
 #ifdef DEBUG
-    printWithTs("unlocking queue for enqueueing (read/write)\n");
+    printWithTs("unlocking queue for dequeueing (read/write)\n");
 #endif
     pthread_rwlock_unlock(&rwLock);
 #ifdef DEBUG
-    printWithTs("done unlocking queue for enqueueing (read/write)\n");
+    printWithTs("done unlocking queue for dequeueing (read/write)\n");
 #endif
     return path;
 }
@@ -313,6 +313,7 @@ void handleDirectory(char *path, char *searchTerm) {
     DIR *dir;
     dirent *entry;
 
+    printWithTs("Handling directory: %s\n", path);
 
     // Open directory
     if ((dir = opendir(path)) == NULL) {
