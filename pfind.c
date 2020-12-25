@@ -43,12 +43,11 @@ atomic_int failedThreads;
 /**
  * Allocate memory for queue and initiate value
  */
-Queue *newQueue() {
-    Queue *queue = malloc(sizeof(Queue));
+void initQueue() {
+    queue = malloc(sizeof(Queue));
     queue->size = 0;
     queue->first = NULL;
     queue->last = NULL;
-    return queue;
 }
 
 /**
@@ -375,7 +374,7 @@ int main(int c, char *args[]) {
     }
 
     // Init our environment
-    queue = newQueue();
+    initQueue();
     initThreadingVars();
     initThreads(&threads, searchTerm);
 
