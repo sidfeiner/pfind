@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -8,7 +7,6 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <stdatomic.h>
-#include <math.h>
 
 #define T_UNKNOWN 0
 #define T_FILE 1
@@ -41,24 +39,6 @@ atomic_int createdProcesses;
 atomic_int foundFiles;
 atomic_int runningThreads;
 atomic_int failedThreads;
-
-long getNanoTs(void) {
-    struct timespec spec;
-    clock_gettime(CLOCK_REALTIME, &spec);
-    return (int64_t) (spec.tv_sec) * (int64_t) 1000000000 + (int64_t) (spec.tv_nsec);
-}
-
-pthread_mutex_t printLock;
-
-void printWithTs(char *fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    pthread_mutex_lock(&printLock);
-    printf("[%d] : %lu : ", pthread_self(), getNanoTs());
-    vprintf(fmt, args);
-    pthread_mutex_unlock(&printLock);
-    va_end(args);
-}
 
 /**
  * Allocate memory for queue and initiate value
@@ -227,7 +207,7 @@ char *pathJoin(char *dir, char *entry) {
 int hasReadPermission(char *path) {
     struct stat s;
     lstat(path, &s);
-    return (s.st_mode & S_IRUSR) || (s.st_mode & S_IRGRP);
+    return s.st_mode & S_IRUSR;
 }
 
 /**
@@ -247,6 +227,8 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
             case T_DIR:
                 if (hasReadPermission(newPath)) {
                     enQueue(newPath);
+                } else {
+                    printf("Directory %s: Permission denied.\n", newPath);
                 }
                 break;
             case T_LINK:
@@ -258,7 +240,7 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 free(newPath);
                 break;
             default:
-                printWithTs("unknown type format: %d\n", entry->d_type);
+                break;
         }
     }
 }
@@ -323,7 +305,6 @@ void *threadMain(void *searchTerm) {
 int main(int c, char *args[]) {
     char *rootDir, *searchTerm;
     pthread_t *threads;
-    pthread_mutex_init(&printLock, NULL);
     if (c != 4) {
         printf("wrong amount of arguments given\n");
     }
@@ -369,7 +350,6 @@ int main(int c, char *args[]) {
 
     printf("Done searching, found %d files\n", foundFiles);
 
-    pthread_mutex_destroy(&printLock);
     pthread_mutex_destroy(&queueLock);
     pthread_rwlock_destroy(&rwLock);
     pthread_cond_destroy(&queueConsumableCond);
