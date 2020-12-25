@@ -8,7 +8,7 @@
 #include <dirent.h>
 #include <stdatomic.h>
 
-#undef DEBUG
+#define DEBUG
 #ifdef DEBUG
 #include <stdarg.h>
 #endif
@@ -68,12 +68,11 @@ void printWithTs(char *fmt, ...) {
 /**
  * Allocate memory for queue and initiate value
  */
-Queue *newQueue() {
-    Queue *q = malloc(sizeof(Queue));
-    q->size = 0;
-    q->first = NULL;
-    q->last = NULL;
-    return q;
+void initQueue() {
+    queue = malloc(sizeof(Queue));
+    queue->size = 0;
+    queue->first = NULL;
+    queue->last = NULL;
 }
 
 /**
@@ -298,7 +297,7 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 free(newPath);
                 break;
             default:
-                printf("unknown type format: %d\n", entry->d_type);
+                break;
         }
     }
 }
@@ -335,6 +334,11 @@ void handleDirectory(char *path, char *searchTerm) {
     }
 }
 
+/**
+ * Entry point for all threads
+ * At first, thread will wait for condition that all threads have done being initiated,
+ * and only then will it start handling directories
+ */
 void *threadMain(void *searchTerm) {
     char *path;
     pthread_mutex_lock(&startLock);
@@ -342,6 +346,9 @@ void *threadMain(void *searchTerm) {
     if (createdProcesses == parallelism) {
         pthread_cond_signal(&doneInitCond);
     }
+
+    // For last thread, this line might be hit after main broadcasts to start, but it will stop waiting on one of the
+    // following queueConsumableCond signals once a new item is added to the queue
     pthread_cond_wait(&queueConsumableCond, &startLock);
     pthread_mutex_unlock(&startLock);
     while (1) {
@@ -358,6 +365,53 @@ void *threadMain(void *searchTerm) {
         }
     }
     pthread_exit(NULL);
+}
+
+/**
+ * Allocate memory for thread array and start them
+ */
+void initThreads(pthread_t **threads, char *searchTerm) {
+    if ((*threads = malloc(sizeof(pthread_t) * parallelism)) == NULL) {
+        printf("failed allocating memory for threads\n");
+        exit(1);
+    }
+
+    pthread_t *limit = *threads + parallelism;
+    for (pthread_t *tmpThread = *threads; tmpThread < limit; tmpThread++) {
+        pthread_create(tmpThread, NULL, threadMain, searchTerm);
+    }
+}
+
+/**
+ * Wait for all threads to finish
+ */
+void waitForThreads(pthread_t *threads) {
+    pthread_t *limit = threads + parallelism;
+    for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
+        pthread_join(*tmpThread, NULL);
+    }
+
+}
+
+/**
+ * Init mutexes and condition variables
+ */
+void initThreadingVars() {
+    pthread_mutex_init(&queueLock, NULL);
+    pthread_rwlock_init(&rwLock, NULL);
+    pthread_cond_init(&queueConsumableCond, NULL);
+    pthread_cond_init(&doneInitCond, NULL);
+}
+
+/**
+ * Destroy mutexes and condition variables
+ */
+void destroyThreadingVars() {
+    pthread_mutex_destroy(&printLock);
+    pthread_mutex_destroy(&queueLock);
+    pthread_rwlock_destroy(&rwLock);
+    pthread_cond_destroy(&queueConsumableCond);
+    pthread_cond_destroy(&doneInitCond);
 }
 
 int main(int c, char *args[]) {
@@ -379,45 +433,28 @@ int main(int c, char *args[]) {
         exit(1);
     }
 
-    if ((threads = malloc(sizeof(pthread_t) * parallelism)) == NULL) {
-        printf("failed allocating memory for threads\n");
-        exit(1);
-    }
-    pthread_t *limit = threads + parallelism;
+    // Init our environment
+    initQueue();
+    initThreadingVars();
+    initThreads(&threads, searchTerm);
 
-    pthread_mutex_init(&queueLock, NULL);
-    pthread_rwlock_init(&rwLock, NULL);
-    pthread_cond_init(&queueConsumableCond, NULL);
-    pthread_cond_init(&doneInitCond, NULL);
-
-    queue = newQueue();
-
-    for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
-        pthread_create(tmpThread, NULL, threadMain, searchTerm);
-    }
-
-    unsafeEnQueue(rootDir);
-
+    // Wait for all threads to have been created and the start all threads
     pthread_mutex_lock(&startLock);
     pthread_cond_wait(&doneInitCond, &startLock);
+    unsafeEnQueue(rootDir);
     pthread_cond_broadcast(&queueConsumableCond);
     pthread_mutex_unlock(&startLock);
 
-    for (pthread_t *tmpThread = threads; tmpThread < limit; tmpThread++) {
-        pthread_join(*tmpThread, NULL);
-    }
-
+    // Wait for all threads to finish
+    waitForThreads(threads);
     printf("Done searching, found %d files\n", foundFiles);
 
-    pthread_mutex_destroy(&printLock);
-    pthread_mutex_destroy(&queueLock);
-    pthread_rwlock_destroy(&rwLock);
-    pthread_cond_destroy(&queueConsumableCond);
-    pthread_cond_destroy(&doneInitCond);
-
+    // Cleanup our environment
+    destroyThreadingVars();
     free(queue);
     free(threads);
 
+    // Check if any thread failed
     if (failedThreads > 0) {
         exit(1);
     }
