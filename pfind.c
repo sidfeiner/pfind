@@ -157,11 +157,11 @@ int getTypeFromPath(char *path) {
  */
 int getTypeFromDirent(dirent *ent) {
     switch (ent->d_type) {
-        case DT_DIR:
+        case 4:
             return T_DIR;
-        case DT_REG:
+        case 8:
             return T_FILE;
-        case DT_LNK:
+        case 10:
             return T_LINK;
         default:
             return T_UNKNOWN;
@@ -258,7 +258,7 @@ void handleDirectory(char *path, char *searchTerm) {
 
     // Open directory
     if ((dir = opendir(path)) == NULL) {
-        printf("failed opening dir\n");
+        printf("Directory %s: Permission denied.\n", path);
         return;
     }
 
@@ -380,7 +380,9 @@ int main(int c, char *args[]) {
 
     // Wait for all threads to have been created and the start all threads
     pthread_mutex_lock(&startLock);
-    pthread_cond_wait(&doneInitCond, &startLock);
+    if (createdProcesses != parallelism) {
+        pthread_cond_wait(&doneInitCond, &startLock);
+    }
     unsafeEnQueue(rootDir);
     pthread_cond_broadcast(&queueConsumableCond);
     pthread_mutex_unlock(&startLock);
