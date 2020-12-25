@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
@@ -8,7 +7,11 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <stdatomic.h>
-#include <math.h>
+
+#undef DEBUG
+#ifdef DEBUG
+#include <stdarg.h>
+#endif
 
 #define T_UNKNOWN 0
 #define T_FILE 1
@@ -32,6 +35,7 @@ typedef struct queue {
 Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLock;
+pthread_mutex_t printLock;
 pthread_rwlock_t rwLock;
 
 int parallelism;
@@ -42,33 +46,34 @@ atomic_int foundFiles;
 atomic_int runningThreads;
 atomic_int failedThreads;
 
+#ifdef DEBUG
 long getNanoTs(void) {
     struct timespec spec;
     clock_gettime(CLOCK_REALTIME, &spec);
     return (int64_t) (spec.tv_sec) * (int64_t) 1000000000 + (int64_t) (spec.tv_nsec);
 }
 
-pthread_mutex_t printLock;
 
 void printWithTs(char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     pthread_mutex_lock(&printLock);
-    printf("[%d] : %lu : ", pthread_self(), getNanoTs());
+    printf("[%02x] : %lu : ", pthread_self(), getNanoTs());
     vprintf(fmt, args);
     pthread_mutex_unlock(&printLock);
     va_end(args);
 }
+#endif
 
 /**
  * Allocate memory for queue and initiate value
  */
 Queue *newQueue() {
-    Queue *queue = malloc(sizeof(Queue));
-    queue->size = 0;
-    queue->first = NULL;
-    queue->last = NULL;
-    return queue;
+    Queue *q = malloc(sizeof(Queue));
+    q->size = 0;
+    q->first = NULL;
+    q->last = NULL;
+    return q;
 }
 
 /**
@@ -83,9 +88,18 @@ int unsafeGetQueueSize() {
  * Safely return the amount of items in queue (lock only queue's size)
  */
 int getQueueSize() {
+#ifdef DEBUG
+    printWithTs("locking queue for queue size (read)\n");
+#endif
     pthread_rwlock_rdlock(&rwLock);
     int size = unsafeGetQueueSize();
+#ifdef DEBUG
+    printWithTs("unlocking queue for queue size (read)\n");
+#endif
     pthread_rwlock_unlock(&rwLock);
+#ifdef DEBUG
+    printWithTs("done unlocking queue for queue size (read)\n");
+#endif
     return size;
 }
 
@@ -109,9 +123,18 @@ void unsafeEnQueue(char *str) {
  *  Add item to queue
  */
 void enQueue(char *str) {
+#ifdef DEBUG
+    printWithTs("locking queue for enqueueing (read/write)\n");
+#endif
     pthread_rwlock_wrlock(&rwLock);
     unsafeEnQueue(str);
+#ifdef DEBUG
+    printWithTs("unlocking queue for enqueueing (read/write)\n");
+#endif
     pthread_rwlock_unlock(&rwLock);
+#ifdef DEBUG
+    printWithTs("done unlocking queue for enqueueing (read/write)\n");
+#endif
     pthread_cond_signal(&queueConsumableCond);
 }
 
@@ -139,14 +162,29 @@ char *unsafeDeQueue() {
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
+#ifdef DEBUG
+    printWithTs("unlocking for cond var dequeueing\n");
+#endif
     pthread_mutex_lock(&queueLock);
     while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
+#ifdef DEBUG
+    printWithTs("unlocking queue for cond var dequeueing\n");
+#endif
     pthread_mutex_unlock(&queueLock);
+#ifdef DEBUG
+    printWithTs("locking queue for enqueueing (read/write)\n");
+#endif
     pthread_rwlock_wrlock(&rwLock);
     char *path = unsafeDeQueue();
+#ifdef DEBUG
+    printWithTs("unlocking queue for enqueueing (read/write)\n");
+#endif
     pthread_rwlock_unlock(&rwLock);
+#ifdef DEBUG
+    printWithTs("done unlocking queue for enqueueing (read/write)\n");
+#endif
     return path;
 }
 
@@ -156,11 +194,11 @@ char *deQueue() {
  * @return -1 if conversion failed, 0 if successfull
  */
 int parseParallelism(char *strParallelism, int *intParallelism) {
-    int parallelism = (int) strtol(strParallelism, NULL, 10);
-    if (parallelism == UINT_MAX && errno == ERANGE) {
+    int prlsm = (int) strtol(strParallelism, NULL, 10);
+    if (prlsm == UINT_MAX && errno == ERANGE) {
         return -1;
     }
-    *intParallelism = parallelism;
+    *intParallelism = prlsm;
     return 0;
 }
 
@@ -227,7 +265,7 @@ char *pathJoin(char *dir, char *entry) {
 int hasReadPermission(char *path) {
     struct stat s;
     lstat(path, &s);
-    return (s.st_mode & S_IRUSR) || (s.st_mode & S_IRGRP);
+    return s.st_mode & S_IRUSR;
 }
 
 /**
@@ -247,6 +285,8 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
             case T_DIR:
                 if (hasReadPermission(newPath)) {
                     enQueue(newPath);
+                } else {
+                    printf("Directory %s: Permission denied.\n", newPath);
                 }
                 break;
             case T_LINK:
@@ -258,7 +298,7 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 free(newPath);
                 break;
             default:
-                printWithTs("unknown type format: %d\n", entry->d_type);
+                printf("unknown type format: %d\n", entry->d_type);
         }
     }
 }
