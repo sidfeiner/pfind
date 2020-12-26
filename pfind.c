@@ -349,6 +349,7 @@ void handleDirectory(char *path, char *searchTerm) {
  */
 void *threadMain(void *searchTerm) {
     char *path;
+    pthread_mutex_lock(&startLock);
     createdProcesses++;
     if (createdProcesses == parallelism) {
 #ifdef DEBUG
@@ -359,7 +360,6 @@ void *threadMain(void *searchTerm) {
 
     // For last thread, this line might be hit after main broadcasts to start, but it will stop waiting on one of the
     // following queueConsumableCond signals once a new item is added to the queue
-    pthread_mutex_lock(&startLock);
 #ifdef DEBUG
     printWithTs("waiting for queueConsumableCond when createdProcesses = %d\n", createdProcesses);
 #endif
