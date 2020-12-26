@@ -24,7 +24,7 @@ MAX_WORD_SIZE = 10
 REGULAR_FILE_PROBA = 0.7  # When using links, 30% will be links and 70% regular files
 UNSEARCHABLE_DIR_PROBA = 0.1
 DEBUG = True
-PERMISSION_DENIED_REGEX = re.compile(r"Directory (?P<path>.+): Permission denied")
+PERMISSION_DENIED_REGEX = re.compile(r"Directory (?P<path>.+): Permission denied\.")
 
 valid_file_chars = ""
 for i in range(ord('a'), ord('z')):
@@ -239,7 +239,7 @@ def info_missing_all(missing_files: List[str], missing_links: List[str], missing
     info_missing(missing_files, "Following files should have matched but weren't printed:")
     info_missing(missing_links, "Following links should have matched but weren't printed:")
     info_missing(missing_unsearchable,
-                 "Following unsearchable files should have `Permission Denied` but weren't printed:")
+                 "Following unsearchable files should have `Permission denied` but weren't printed:")
 
 
 def find_duplicates(output: List[str]) -> (bool, Dict[str, int]):
@@ -283,7 +283,7 @@ def assert_correct_results(must_match_files: List[str], must_match_links: List[s
             missing_files = [f for f in must_match_files if f not in output]
             missing_links = [f for f in must_match_links if f not in output]
             missing_unsearchable_files = [f for f in unsearchable_dirs if
-                                          f"Directory {f}: Permission denied" not in output]
+                                          f"Directory {f}: Permission denied." not in output]
             info_missing_all(missing_files, missing_links, missing_unsearchable_files)
             info_redundant_prints(output, must_match_files, must_match_links, unsearchable_dirs)
 

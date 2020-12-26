@@ -209,7 +209,7 @@ int hasReadPermission(char *path) {
     if (lstat(path, &fileStat)) {
         return 0;
     }
-    return fileStat.st_mode & S_IRUSR;
+    return (fileStat.st_mode & S_IRUSR) && (fileStat.st_mode & S_IXUSR);
 }
 
 /**
