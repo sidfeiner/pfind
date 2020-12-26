@@ -381,9 +381,9 @@ def run():
     compiler = "gcc-5.3.0" if 'nova' in platform.node() else 'gcc'
     run_command(f"{compiler} -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread pfind.c -o {PFIND_EXEC}")
     logging.info("running...")
-    for _ in range(10):
-        test_links_run()
+    for _ in range(20):
         test_normal_run()
+        test_links_run()
         test_unsearchable_dir_run()
         test_all()
 
