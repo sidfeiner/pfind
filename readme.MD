@@ -22,6 +22,8 @@ Instead of manually rerunning it, you can do the following, assuming the command
 * For MacOS: `repeat N {CMD}`. For example `repeat 5000 {./pfind /path/to/dir "pdf" 2}`
 * For bash: `for {1..N}; do CMD; done;`. For example `for i in {1..5000}; do ./pfind /path/to/dir "pdf" 2; done;`
   * In nova, you must use bash so before using this command, run `bash` and then run the loop
+  
+Now that you've finished reading everything, just run: `python3 tester.py`
 #### Personal steps
 
 ##### Step I
