@@ -31,8 +31,10 @@ valid_file_chars += "-_."
 
 
 def parallelism_generator():
-    yield 1
-    yield 2
+    for _ in range(50):
+        yield 1
+    for _ in range(50):
+        yield 2
     for i in range(10, 100, 25):
         yield i
     for i in range(100, 1000, 150):
@@ -291,14 +293,12 @@ def test_case(with_link: bool, with_unsearchable_dir: bool):
 
     match_files, match_links, unsearchable_dirs = generate_filesystem(match_files_amt, search_term, with_link,
                                                                       with_unsearchable_dir)
+    print("running on file system with many different parallelisms")
     for parallelism in parallelism_generator():
-        logging.info(f"---------- parallelism {parallelism} ----------")
         cmd = f"""{PFIND_EXEC} {TEST_DIR} "{search_term}" {parallelism}"""
-        logging.info(
-            "** if tester gets stuck here that means you have a deadlock / lost wake up somewhere in your code **")
-        logging.info(f"** if that's the case, stop the tester, and run the command itself to debug: {cmd}")
         output = run_command(cmd)
         assert_correct_results(match_files, match_links, unsearchable_dirs, output, search_term, cmd)
+    print("done running on file system")
 
 
 def test_normal_run():
