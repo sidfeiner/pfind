@@ -35,6 +35,7 @@ pthread_rwlock_t rwLock;
 int parallelism;
 pthread_cond_t queueConsumableCond;
 pthread_cond_t doneInitCond;
+atomic_int threadsSignaled;
 atomic_int createdProcesses;
 atomic_int foundFiles;
 atomic_int runningThreads;
@@ -283,7 +284,6 @@ void handleDirectory(char *path, char *searchTerm) {
  */
 void *threadMain(void *searchTerm) {
     char *path;
-    pthread_mutex_lock(&startLock);
     createdProcesses++;
     if (createdProcesses == parallelism) {
         pthread_cond_signal(&doneInitCond);
@@ -291,7 +291,10 @@ void *threadMain(void *searchTerm) {
 
     // For last thread, this line might be hit after main broadcasts to start, but it will stop waiting on one of the
     // following queueConsumableCond signals once a new item is added to the queue
-    pthread_cond_wait(&queueConsumableCond, &startLock);
+    pthread_mutex_lock(&startLock);
+    if (threadsSignaled == 0) {
+        pthread_cond_wait(&queueConsumableCond, &startLock);
+    }
     pthread_mutex_unlock(&startLock);
     while (1) {
         path = deQueue();
@@ -340,6 +343,7 @@ void waitForThreads(pthread_t *threads) {
  */
 void initThreadingVars() {
     pthread_mutex_init(&queueLock, NULL);
+    pthread_mutex_init(&startLock, NULL);
     pthread_rwlock_init(&rwLock, NULL);
     pthread_cond_init(&queueConsumableCond, NULL);
     pthread_cond_init(&doneInitCond, NULL);
@@ -350,6 +354,7 @@ void initThreadingVars() {
  */
 void destroyThreadingVars() {
     pthread_mutex_destroy(&queueLock);
+    pthread_mutex_destroy(&startLock);
     pthread_rwlock_destroy(&rwLock);
     pthread_cond_destroy(&queueConsumableCond);
     pthread_cond_destroy(&doneInitCond);
@@ -385,6 +390,7 @@ int main(int c, char *args[]) {
     }
     unsafeEnQueue(rootDir);
     pthread_cond_broadcast(&queueConsumableCond);
+    threadsSignaled = 1;
     pthread_mutex_unlock(&startLock);
 
     // Wait for all threads to finish
