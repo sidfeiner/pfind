@@ -2,6 +2,7 @@ import math
 import os
 import random
 import logging
+import re
 import shutil
 import stat
 import subprocess
@@ -23,6 +24,7 @@ MAX_WORD_SIZE = 10
 REGULAR_FILE_PROBA = 0.7  # When using links, 30% will be links and 70% regular files
 UNSEARCHABLE_DIR_PROBA = 0.1
 DEBUG = True
+PERMISSION_DENIED_REGEX = re.compile(r"Directory (?P<path>.+): Permission denied")
 
 valid_file_chars = ""
 for i in range(ord('a'), ord('z')):
@@ -247,25 +249,51 @@ def find_duplicates(output: List[str]) -> (bool, Dict[str, int]):
     return len(duplicates) > 0, duplicates
 
 
+def info_redundant_prints(output: List[str], must_match_files: List[str], must_match_links: List[str],
+                          unsearchable_dirs: List[str]):
+    for line in output[:-1]:
+        if 'Permission denied' in line:
+            # Permission Denied
+            match = PERMISSION_DENIED_REGEX.match(line)
+            if match:
+                path = match.group('path')
+                if path not in unsearchable_dirs:
+                    logging.error(f"pfind printed {path} as unsearchable, but it is searchable")
+            else:
+                logging.error("Permission denied error message was in wrong format")
+        else:
+            # Normal match
+            if line not in must_match_files and line not in must_match_links:
+                logging.error(f"pfind printed {line} as a match, but it shouldn't")
+
+
 def assert_correct_results(must_match_files: List[str], must_match_links: List[str], unsearchable_dirs: List[str],
                            output: List[str], search_term: str, original_cmd: str):
     total_matches = len(must_match_files) + len(must_match_links) + len(unsearchable_dirs)
     has_duplicates, duplicates = find_duplicates(output)
-    if len(output) != total_matches + 1 or has_duplicates:
+    expected_last_line = f'Done searching, found {len(must_match_links) + len(must_match_files)} files'
+    if len(output) != total_matches + 1 or has_duplicates or output[-1] != expected_last_line:
         logging.info("-------------- ERROR --------------")
+        if output[-1] != expected_last_line:
+            logging.error("#######")
+            logging.error(f"Last line should have been `{expected_last_line}` but was `{output[-1]}`")
         if len(output) != total_matches + 1:
+            logging.error("#######")
             logging.info(f"program did not print correct number of lines (matches_amount + 1 = {total_matches + 1})")
             missing_files = [f for f in must_match_files if f not in output]
             missing_links = [f for f in must_match_links if f not in output]
             missing_unsearchable_files = [f for f in unsearchable_dirs if
                                           f"Directory {f}: Permission denied" not in output]
             info_missing_all(missing_files, missing_links, missing_unsearchable_files)
+            info_redundant_prints(output, must_match_files, must_match_links, unsearchable_dirs)
+
             logging.error(
                 f"for search term {search_term}, should have printed {total_matches + 1} lines but printed {len(output)}:")
             for line in output:
                 logging.info(line)
             logging.error('----------------------------')
         if has_duplicates:
+            logging.error("#######")
             logging.error(
                 f"Following lines have been printed more than once. First number is amount of times it was printed")
             for line, amt in duplicates.items():
@@ -334,6 +362,8 @@ def run_command(command):
     try:
         output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=TIMEOUT_SECONDS)
         return output.strip().decode().split('\n')
+    except subprocess.CalledProcessError as e:
+        return e.output.strip().decode().split('\n')
     except subprocess.TimeoutExpired as e:
         logging.error("--------------------------------------------")
         logging.error(

@@ -13,6 +13,9 @@ our search term and that the correct amount of "Permission Denied: <DIR>" were p
 In addition, it ensures that no line was printed out more than once (could mean that multiple threads
 handled the same directory). 
 
+If tester says that you printed to many rows (but no duplicates) it might mean you don't check permissions well 
+or that you also print directory names that match the search term, and not only files.
+
 To recognize a deadlock, every run is allowed a timeout and if that is reached, the tester raises an error.
 After the error is recognized, the file system will not be deleted so you can run it yourself and debug your program.
 To help do that, the tester will print the command that found the bug. Because of the processor's scheduling mechanism, 
