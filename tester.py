@@ -9,7 +9,6 @@ import subprocess
 from subprocess import check_output
 import shlex
 import sys
-import time
 import platform
 from collections import Counter
 from pathlib import Path
@@ -21,6 +20,7 @@ TIMEOUT_SECONDS = 15
 PFIND_EXEC = "./pfind"
 TEST_DIR = "test_filesystem"
 MAX_WORD_SIZE = 10
+MAX_DEPTH = 15
 REGULAR_FILE_PROBA = 0.7  # When using links, 30% will be links and 70% regular files
 UNSEARCHABLE_DIR_PROBA = 0.1
 DEBUG = True
@@ -35,7 +35,7 @@ valid_file_chars += "-_."
 def parallelism_generator():
     for _ in range(50):
         yield 1
-    for _ in range(50):
+    for _ in range(200):
         yield 2
     for i in range(10, 100, 25):
         yield i
@@ -105,10 +105,10 @@ def get_all_dir_parents(dir_name: str):
 def generate_dir_names(max_leafs_amt: int, with_parents: bool, exclude_dirs: List[str] = None):
     exclude_dirs = exclude_dirs or []
     s = set()
-    for i in range(max_leafs_amt):
-        dir_name = generate_dir(random.randint(1, MAX_WORD_SIZE))
+    for _ in range(max_leafs_amt):
+        dir_name = generate_dir(random.randint(1, MAX_DEPTH))
         while dir_name in exclude_dirs:
-            dir_name = generate_dir(random.randint(1, MAX_WORD_SIZE))
+            dir_name = generate_dir(random.randint(1, MAX_DEPTH))
         if with_parents:
             all_parents = get_all_dir_parents(dir_name)
             for parent in all_parents:
@@ -147,7 +147,7 @@ def touch_file(path: str):
 
 def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool, with_unsearchable_dir: bool):
     files_amount = random.randint(match_files_amt, match_files_amt + 3000)
-    max_dirs_amount = random.randint(2, 150)
+    max_dirs_amount = random.randint(2, 50)
     unsearchable_dirs_amt = max(1, math.ceil(UNSEARCHABLE_DIR_PROBA * max_dirs_amount)) if with_unsearchable_dir else 0
     dir_names = generate_dir_names(max_dirs_amount, True) + [TEST_DIR]
     unsearchable_dirs = []
@@ -220,7 +220,10 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
             dir_path = touch_file(p)
             logging.debug(f"remove read permission from {p}")
             cur_permission = stat.S_IMODE(os.lstat(dir_path).st_mode)
+            logging.debug(f"permission {dir_path} before: {cur_permission}")
             dir_path.chmod(cur_permission & ~stat.S_IRUSR)
+            cur_permission = stat.S_IMODE(os.lstat(dir_path).st_mode)
+            logging.debug(f"permission {dir_path} after: {cur_permission}")
 
     logging.info("done generating filesystem.")
     return match_files, match_links, unsearchable_dirs
@@ -231,7 +234,7 @@ def info_missing(lines: List[str], msg: str):
         logging.error('---------------')
         logging.error(msg)
         for f in lines:
-            logging.error(f)
+            logging.error(f"{f}, with permission {stat.S_IMODE(os.lstat(f).st_mode)}")
         logging.error('---------------')
 
 
@@ -321,12 +324,12 @@ def test_case(with_link: bool, with_unsearchable_dir: bool):
 
     match_files, match_links, unsearchable_dirs = generate_filesystem(match_files_amt, search_term, with_link,
                                                                       with_unsearchable_dir)
-    print("running on file system with many different parallelisms")
+    logging.info("running on file system with many different parallelisms")
     for parallelism in parallelism_generator():
         cmd = f"""{PFIND_EXEC} {TEST_DIR} "{search_term}" {parallelism}"""
         output = run_command(cmd)
         assert_correct_results(match_files, match_links, unsearchable_dirs, output, search_term, cmd)
-    print("done running on file system")
+    logging.info("done running on file system")
 
 
 def test_normal_run():
