@@ -91,3 +91,21 @@ pthread_rwlock_unlock(&rwLock);
 
 pthread_rwlock_destroy(&rwLock);
 ```
+
+#### Personal steps
+Python 3 tester that randomly generates filesystems for the following cases:
+* Normal case (without links or unsearchable directories)
+* With links (30 percent of created files will be links, 70 percent will be regular files)
+* With unsearchable directories (directories where I remove `read` permission)
+* All of the above (both with links and with unsearchable directories)
+
+For every such case, the tester checks that the correct amount of files and link names contain
+our search term and that the correct amount of "Permission Denied: <DIR>" were printed during our run.
+
+In addition, it ensures that no line was printed out more than once (could mean that multiple threads
+handled the same directory). 
+
+To recognize a deadlock, every run is allowed a timeout and if that is reached, the tester raises an error.
+After the error is recognized, the file system will not be deleted so you can run it yourself and debug your program.
+To help do that, the tester will print the command that found the bug. Because of the processor's scheduling mechanism, 
+it might take a few tries until you hit the same racing condition as the tester reached.
