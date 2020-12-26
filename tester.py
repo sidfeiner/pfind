@@ -5,19 +5,20 @@ import logging
 import shutil
 import stat
 import subprocess
+from subprocess import check_output
 import shlex
 import sys
 import time
 import platform
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 
 logging.basicConfig(format="%(msg)s", level='DEBUG' if '--debug' in sys.argv else 'INFO')
 
-MAX_LOG_INTERVAL_SECONDS = 2
+TIMEOUT_SECONDS = 15
 PFIND_EXEC = "./pfind"
-TEST_DIR = "test"
+TEST_DIR = "test_filesystem"
 MAX_WORD_SIZE = 10
 REGULAR_FILE_PROBA = 0.7  # When using links, 30% will be links and 70% regular files
 UNSEARCHABLE_DIR_PROBA = 0.1
@@ -123,6 +124,23 @@ def generate_containing_word(file_dir: str, search_term: str):
     return os.path.join(file_dir, file_name)
 
 
+def ensure_file_dir(path: str):
+    """Receive patht to file and ensure it's directory exists"""
+    dir_name = os.path.dirname(path)
+    logging.debug(f"making dir {dir_name}")
+    dir_path = Path(dir_name)
+    dir_path.mkdir(parents=True, exist_ok=True)
+    return dir_path
+
+
+def touch_file(path: str):
+    """Touches file and returns the directory it's in, as a Path"""
+    dir_path = ensure_file_dir(path)
+    logging.debug(f"touching {path}")
+    Path(path).touch()
+    return dir_path
+
+
 def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool, with_unsearchable_dir: bool):
     files_amount = random.randint(match_files_amt, match_files_amt + 3000)
     max_dirs_amount = random.randint(2, 150)
@@ -162,7 +180,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
         # File generated MUSTN'T contain search term
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(file_dir, file_name))
-        while search_term in file_name or file_name in ('.', '..') or not file_path_valid(final_path):
+        while search_term in file_name or not file_path_valid(final_path):
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(file_dir, file_name))
         if not with_link or 0 <= random.random() <= regular_file_proba:
@@ -178,7 +196,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
     for unsearchable_dir in unsearchable_dirs:
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
-        while search_term in file_name or file_name in ('.', '..') or not file_path_valid(final_path):
+        while search_term in file_name or not file_path_valid(final_path):
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
         logging.debug(f"added {final_path} to matchable_in_unsearchable_files")
@@ -186,27 +204,16 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
 
     logging.info("generating file system...")
     for p in match_files + unmatched_files:
-        dir_name = os.path.dirname(p)
-        logging.debug(f"making dir {dir_name}")
-        Path(dir_name).mkdir(parents=True, exist_ok=True)
-        logging.debug(f"touching {p}")
-        Path(p).touch()
+        touch_file(p)
     if with_link:
         for p in match_links + unmatched_links:
-            dir_name = os.path.dirname(p)
-            logging.debug(f"making dir {dir_name}")
-            Path(dir_name).mkdir(parents=True, exist_ok=True)
+            ensure_file_dir(p)
             target, is_dir = generate_link_target(match_files, unmatched_files)
             logging.debug(f"creating symlink from {p} to {target}")
             Path(p).symlink_to(target, target_is_directory=is_dir)
     if with_unsearchable_dir:
         for p in matchable_in_unsearchable_files:
-            dir_name = os.path.dirname(p)
-            dir_path = Path(dir_name)
-            logging.debug(f"creating dir {dir_name}")
-            dir_path.mkdir(parents=True, exist_ok=True)
-            logging.debug(f"touching {p}")
-            Path(p).touch(exist_ok=True)
+            dir_path = touch_file(p)
             logging.debug(f"remove read permission from {p}")
             cur_permission = stat.S_IMODE(os.lstat(dir_path).st_mode)
             dir_path.chmod(cur_permission & ~stat.S_IRUSR)
@@ -231,11 +238,11 @@ def info_missing_all(missing_files: List[str], missing_links: List[str], missing
                  "Following unsearchable files should have `Permission Denied` but weren't printed:")
 
 
-def find_duplicates(output: List[str]) -> bool:
+def find_duplicates(output: List[str]) -> (bool, Dict[str, int]):
     """Returns if duplicates were found and the duplicates"""
     c = Counter(output)
     duplicates = {k: v for k, v in c.items() if v > 1}
-    return len(duplicates)>0, duplicates
+    return len(duplicates) > 0, duplicates
 
 
 def assert_correct_results(must_match_files: List[str], must_match_links: List[str], unsearchable_dirs: List[str],
@@ -248,7 +255,8 @@ def assert_correct_results(must_match_files: List[str], must_match_links: List[s
             logging.info(f"program did not print correct number of lines (matches_amount + 1 = {total_matches + 1})")
             missing_files = [f for f in must_match_files if f not in output]
             missing_links = [f for f in must_match_links if f not in output]
-            missing_unsearchable_files = [f for f in unsearchable_dirs if f"Directory {f}: Permission denied" not in output]
+            missing_unsearchable_files = [f for f in unsearchable_dirs if
+                                          f"Directory {f}: Permission denied" not in output]
             info_missing_all(missing_files, missing_links, missing_unsearchable_files)
             logging.error(
                 f"for search term {search_term}, should have printed {total_matches + 1} lines but printed {len(output)}:")
@@ -256,7 +264,8 @@ def assert_correct_results(must_match_files: List[str], must_match_links: List[s
                 logging.info(line)
             logging.error('----------------------------')
         if has_duplicates:
-            logging.error(f"Following lines have been printed more than once. First number is amount of times it was printed")
+            logging.error(
+                f"Following lines have been printed more than once. First number is amount of times it was printed")
             for line, amt in duplicates.items():
                 logging.error(f"{amt}: {line}")
         logging.error('----------------------------')
@@ -269,7 +278,7 @@ def reset_test_dir():
     logging.info("Resetting test directory")
     if os.path.exists(TEST_DIR):
         run_command(f"chmod -R u+r {TEST_DIR}")
-    shutil.rmtree(TEST_DIR)
+        shutil.rmtree(TEST_DIR)
     os.mkdir(TEST_DIR)
 
 
@@ -322,18 +331,16 @@ def test_all():
 
 def run_command(command):
     logging.debug(f"running command: {command}")
-    process = subprocess.Popen(shlex.split(command), stdout=subprocess.PIPE)
-    lines = []
-    checkpoint = time.time()
-    while True:
-        output = process.stdout.readline().decode()
-        if output == '' and (process.poll() is not None or (time.time() - checkpoint) >= MAX_LOG_INTERVAL_SECONDS):
-            break
-        if output:
-            lines.append(output.strip())
-            checkpoint = time.time()
-    rc = process.poll()
-    return lines
+    try:
+        output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=TIMEOUT_SECONDS)
+        return output.strip().decode().split('\n')
+    except subprocess.TimeoutExpired as e:
+        logging.error("--------------------------------------------")
+        logging.error(
+            f"Process did not finish in expected timeout (maximum {TIMEOUT_SECONDS} seconds) so you probably have a deadlock")
+        logging.error(f"Test FileSystem won't be reset until the next time you run the test.")
+        logging.error(f"So you can rerun the command by yourself to debug: {command}")
+        exit(1)
 
 
 def run():
