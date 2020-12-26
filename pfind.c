@@ -205,9 +205,11 @@ char *pathJoin(char *dir, char *entry) {
 }
 
 int hasReadPermission(char *path) {
-    struct stat s;
-    lstat(path, &s);
-    return s.st_mode & S_IRUSR;
+    struct stat fileStat;
+    if (lstat(path, &fileStat)) {
+        return 0;
+    }
+    return fileStat.st_mode & S_IRUSR;
 }
 
 /**
