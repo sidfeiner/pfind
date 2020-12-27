@@ -133,7 +133,7 @@ void enQueue(char *str) {
     pthread_rwlock_wrlock(&rwLock);
     unsafeEnQueue(str);
 #ifdef DEBUG
-    printWithTs("unlocking queue for enqueueing (read/write)\n");
+    printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
     pthread_rwlock_unlock(&rwLock);
 #ifdef DEBUG
@@ -183,7 +183,7 @@ char *deQueue() {
     pthread_rwlock_wrlock(&rwLock);
     char *path = unsafeDeQueue();
 #ifdef DEBUG
-    printWithTs("unlocking queue for dequeueing (read/write)\n");
+    printWithTs("unlocking queue for dequeueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
     pthread_rwlock_unlock(&rwLock);
 #ifdef DEBUG
