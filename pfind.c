@@ -25,6 +25,7 @@ typedef struct dirent dirent;
 
 typedef struct queueItem {
     char *value;
+    pthread_t tId;
     struct queueItem *next;
 } QueueItem;
 
@@ -40,7 +41,7 @@ pthread_mutex_t queueLock;
 pthread_mutex_t printLock;
 pthread_rwlock_t rwLock;
 
-int parallelism;
+atomic_int parallelism;
 pthread_cond_t queueConsumableCond;
 pthread_cond_t doneInitCond;
 atomic_int threadsSignaled;
@@ -107,6 +108,17 @@ int getQueueSize() {
     return size;
 }
 
+QueueItem *unsafePeek() {
+    return queue->first;
+}
+
+QueueItem *peek() {
+    pthread_rwlock_rdlock(&rwLock);
+    QueueItem *item = unsafePeek();
+    pthread_rwlock_unlock(&rwLock);
+    return item;
+}
+
 /**
  * Add string item to queue
  */
@@ -114,6 +126,7 @@ void unsafeEnQueue(char *str) {
     QueueItem *qItem = malloc(sizeof(QueueItem));
     qItem->next = NULL;
     qItem->value = str;
+    qItem->tId = pthread_self();
     if (queue->size == 0) {
         queue->first = qItem;
     } else {
@@ -132,6 +145,7 @@ void enQueue(char *str) {
 #endif
     pthread_rwlock_wrlock(&rwLock);
     unsafeEnQueue(str);
+    pthread_cond_signal(&queueConsumableCond);
 #ifdef DEBUG
     printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
@@ -163,9 +177,24 @@ char *unsafeDeQueue() {
 }
 
 /**
+ * Returns if the thread is allowed to handle this item.
+ * Returns true if:
+ *  1. parallelism is 1, so he MUST handle the item
+ *  2. current thread did not enqueue this item
+ *  3. There is nobody else waiting to consume (everybody is busy)
+ *
+ *  Otherwise returns false
+ */
+int isAllowedToHandle(QueueItem *item) {
+    return parallelism == 1 || item->tId != pthread_self() ||
+           (parallelism - runningThreads - failedThreads - 1) == 0;
+}
+
+/**
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
+    char *path;
 #ifdef DEBUG
     printWithTs("locking for cond var dequeueing\n");
 #endif
@@ -181,7 +210,12 @@ char *deQueue() {
     printWithTs("locking queue for dequeueing (read/write)\n");
 #endif
     pthread_rwlock_wrlock(&rwLock);
-    char *path = unsafeDeQueue();
+    QueueItem *item = unsafePeek();
+    if (item == NULL || !isAllowedToHandle(item)) {
+        path = NULL;
+    } else {
+        path = unsafeDeQueue();
+    }
 #ifdef DEBUG
     printWithTs("unlocking queue for dequeueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
@@ -271,7 +305,7 @@ int hasReadPermission(char *path) {
     if (lstat(path, &fileStat)) {
         return 0;
     }
-    return fileStat.st_mode & S_IRUSR;
+    return (fileStat.st_mode & S_IRUSR) && (fileStat.st_mode & S_IXUSR);
 }
 
 /**
