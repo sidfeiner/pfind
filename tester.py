@@ -29,16 +29,23 @@ UNSEARCHABLE_DIR_PROBA = 0.1
 DEBUG = True
 PERMISSION_DENIED_REGEX = re.compile(r"Directory (?P<path>.+): Permission denied\.")
 
-valid_file_chars = ""
-for i in range(ord('a'), ord('z')):
-    valid_file_chars += 5 * chr(i)
-valid_file_chars += "-_."
+
+def build_valid_chars():
+    """Creates every letter 5 times to ensure a bigger probability of getting a letter, than a special char"""
+    valid_chars = ""
+    for i in range(ord('a'), ord('z')):
+        valid_chars += 5 * chr(i)
+    valid_chars += "-_."
+    return valid_chars
 
 
+valid_file_chars = build_valid_chars()
+
+#TODO: Adapt range of yield 2
 def parallelism_generator():
-    for _ in range(50):
+    for _ in range(10):
         yield 1
-    for _ in range(200):
+    for _ in range(50):
         yield 2
     for i in range(10, 100, 25):
         yield i
@@ -326,6 +333,8 @@ def reset_test_dir():
 
 
 def test_case(with_link: bool, with_unsearchable_dir: bool):
+    tests_amt = 0
+    failed_amt = 0
     match_files_amt = random.randint(3, MAX_MATCHES_AMOUNT)
     search_term = generate_word(random.randint(3, MAX_SEARCH_TERM_SIZE))
     logging.info(
@@ -336,47 +345,84 @@ def test_case(with_link: bool, with_unsearchable_dir: bool):
                                                                       with_unsearchable_dir)
     logging.info("running on file system with many different parallelisms")
     for parallelism in parallelism_generator():
+        tests_amt += 1
         cmd = f"""{PFIND_EXEC} {TEST_DIR} "{search_term}" {parallelism}"""
-        output = run_command(cmd)
+        success, output = run_command(cmd)
+        if not success:
+            logging.warning(f"!!!!!!!!!! WARNING !!!!!!!!!!")
+            logging.warning(f"code returned non-zero exit code")
+            failed_amt += 1
         assert_correct_results(match_files, match_links, unsearchable_dirs, output, search_term, cmd)
     logging.info("done running on file system")
+    return tests_amt, failed_amt
 
 
 def test_normal_run():
     logging.info("------------------------")
     logging.info("Normal test run")
     logging.info("------------------------")
-    test_case(False, False)
+    return test_case(False, False)
 
 
 def test_links_run():
     logging.info("------------------------")
     logging.info("Links test run")
     logging.info("------------------------")
-    test_case(True, False)
+    return test_case(True, False)
 
 
 def test_unsearchable_dir_run():
     logging.info("------------------------")
     logging.info("Unsearchable dir test run")
     logging.info("------------------------")
-    test_case(False, True)
+    return test_case(False, True)
 
 
 def test_all():
     logging.info("------------------------")
     logging.info("Links and unsearchable dir test run")
     logging.info("------------------------")
-    test_case(True, True)
+    return test_case(True, True)
 
 
-def run_command(command):
+def test_non_existing_dir():
+    logging.info("using pfind with non-existing directory")
+    success, output = run_command(f"{PFIND_EXEC} /path/to/bad/dir search_term 1")
+    if success:
+        logging.info(f"Should return exit code other than 0 when root dir does not exist")
+        exit(0)
+    logging.info("successfully exited with non-zero exit code")
+
+
+def test_file_as_root_dir():
+    logging.info("creating temporary file to be used as root dir")
+    path = Path('./test-file')
+    path.touch()
+    success, output = run_command(f"{PFIND_EXEC} {path.absolute()} search_term 1")
+    if success:
+        logging.info(f"Should return exit code other than 0 when root dir is a file and not a dir")
+        path.unlink()
+        exit(0)
+    path.unlink()
+    logging.info("successfully exited with non-zero exit code")
+
+
+def test_bad_root_dir():
+    logging.info("------------------------")
+    logging.info("Test bad root dir as input")
+    logging.info("------------------------")
+
+    test_non_existing_dir()
+    test_file_as_root_dir()
+
+
+def run_command(command) -> (bool, List[str]):
     logging.debug(f"running command: {command}")
     try:
         output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=TIMEOUT_SECONDS)
-        return output.strip().decode().split('\n')
+        return True, output.strip().decode().split('\n')
     except subprocess.CalledProcessError as e:
-        return e.output.strip().decode().split('\n')
+        return False, e.output.strip().decode().split('\n')
     except subprocess.TimeoutExpired as e:
         logging.error("--------------------------------------------")
         logging.error(
@@ -385,18 +431,38 @@ def run_command(command):
         logging.error(f"So you can rerun the command by yourself to debug: {command}")
         exit(1)
 
+def run_all_tests():
+    logging.info("running...")
+    test_bad_root_dir()
+
+    tests_amt = 0
+    failed_amt = 0
+    for _ in range(20):
+        total_normal, failed_normal = test_normal_run()
+        total_links, failed_links = test_links_run()
+        total_unsearchable, failed_unsearchable = test_unsearchable_dir_run()
+        total_all, failed_all = test_all()
+        tests_amt += total_normal + total_links + total_unsearchable + total_all
+        failed_amt += failed_normal + failed_links + failed_unsearchable + failed_all
+    return tests_amt, failed_amt
 
 def run():
     logging.info("compiling...")
     compiler = "gcc-5.3.0" if 'nova' in platform.node() else 'gcc'
-    run_command(f"{compiler} -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread pfind.c -o {PFIND_EXEC}")
-    logging.info("running...")
-    for _ in range(20):
-        test_normal_run()
-        test_links_run()
-        test_unsearchable_dir_run()
-        test_all()
+    success, output = run_command(
+        f"{compiler} -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread pfind.c -o {PFIND_EXEC}")
+    if not success:
+        logging.error("compile unsuccessfull, output:")
+        for line in output:
+            print(line)
+        exit(1)
 
+    tests_amt, failed_amt = run_all_tests()
+
+    if failed_amt > 0:
+        logging.warning(f"!!!!!!WARNING!!!!!!")
+        logging.warning(f"{failed_amt}/{tests_amt} ended with exit code different than 1")
+        logging.warning(f"But if your code got here, at least that means that the output was always correct")
     logging.info("You've passed all the tests, Halleluyaaaaaaaaaaa")
 
 

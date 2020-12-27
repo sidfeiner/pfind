@@ -8,7 +8,7 @@ Python 3 tester that randomly generates filesystems for the following cases:
 * All of the above (both with links and with unsearchable directories)
 
 For every such case, the tester checks that the correct amount of files and link names contain
-our search term and that the correct amount of "Permission Denied: <DIR>" were printed during our run.
+our search term and that the correct amount of "Permission Denied: \<DIR\>" were printed during our run.
 
 In addition, it ensures that no line was printed out more than once (could mean that multiple threads
 handled the same directory). 
