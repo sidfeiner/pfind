@@ -20,7 +20,10 @@ TIMEOUT_SECONDS = 15
 PFIND_EXEC = "./pfind"
 TEST_DIR = "test_filesystem"
 MAX_WORD_SIZE = 10
-MAX_DEPTH = 15
+MAX_DEPTH = 30
+MAX_DIRS_AMOUNT = 150
+MAX_MATCHES_AMOUNT = 50
+MAX_SEARCH_TERM_SIZE = 10
 REGULAR_FILE_PROBA = 0.7  # When using links, 30% will be links and 70% regular files
 UNSEARCHABLE_DIR_PROBA = 0.1
 DEBUG = True
@@ -97,7 +100,8 @@ def get_all_dir_parents(dir_name: str):
     parents = []
     while dir_name != '':
         parent_name = os.path.dirname(dir_name)
-        parents.append(parent_name)
+        if parent_name != '':
+            parents.append(parent_name)
         dir_name = parent_name
     return parents
 
@@ -129,7 +133,7 @@ def generate_containing_word(file_dir: str, search_term: str):
 
 
 def ensure_file_dir(path: str):
-    """Receive patht to file and ensure it's directory exists"""
+    """Receive path to file and ensure it's directory exists"""
     dir_name = os.path.dirname(path)
     logging.debug(f"making dir {dir_name}")
     dir_path = Path(dir_name)
@@ -146,8 +150,8 @@ def touch_file(path: str):
 
 
 def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool, with_unsearchable_dir: bool):
-    files_amount = random.randint(match_files_amt, match_files_amt + 3000)
-    max_dirs_amount = random.randint(2, 50)
+    files_amount = random.randint(match_files_amt, match_files_amt + 4000)
+    max_dirs_amount = random.randint(2, MAX_DIRS_AMOUNT)
     unsearchable_dirs_amt = max(1, math.ceil(UNSEARCHABLE_DIR_PROBA * max_dirs_amount)) if with_unsearchable_dir else 0
     dir_names = generate_dir_names(max_dirs_amount, True) + [TEST_DIR]
     unsearchable_dirs = []
@@ -196,7 +200,9 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
 
     logging.info(
         f"creating {unsearchable_dirs_amt} directories without reading permissions (and adding matchable files inside)")
-    unsearchable_dirs.extend(generate_dir_names(unsearchable_dirs_amt, False, exclude_dirs=dir_names))
+    unsearchable_dirs = generate_dir_names(unsearchable_dirs_amt, False, exclude_dirs=dir_names)
+    dir_names.extend({parent for d in unsearchable_dirs for parent in get_all_dir_parents(d)})
+    dir_names = list(set(dir_names))
     for unsearchable_dir in unsearchable_dirs:
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
@@ -207,15 +213,19 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
         matchable_in_unsearchable_files.append(final_path)
 
     logging.info("generating file system...")
+    logging.info("generating files...")
     for p in match_files + unmatched_files:
         touch_file(p)
     if with_link:
+        logging.info("generating links...")
         for p in match_links + unmatched_links:
+            logging.debug(f"ensuring dir {p}...")
             ensure_file_dir(p)
             target, is_dir = generate_link_target(match_files, unmatched_files)
-            logging.debug(f"creating symlink from {p} to {target}")
+            logging.debug(f"creating symlink from {p} to {target}...")
             Path(p).symlink_to(target, target_is_directory=is_dir)
     if with_unsearchable_dir:
+        logging.info("generating unsearchable dirs...")
         for p in matchable_in_unsearchable_files:
             dir_path = touch_file(p)
             logging.debug(f"remove read permission from {p}")
@@ -316,8 +326,8 @@ def reset_test_dir():
 
 
 def test_case(with_link: bool, with_unsearchable_dir: bool):
-    match_files_amt = random.randint(3, 100)
-    search_term = generate_word(random.randint(1, 10))
+    match_files_amt = random.randint(3, MAX_MATCHES_AMOUNT)
+    search_term = generate_word(random.randint(3, MAX_SEARCH_TERM_SIZE))
     logging.info(
         f"Generating file system with {match_files_amt} files that must be matched for search term {search_term}")
     reset_test_dir()
