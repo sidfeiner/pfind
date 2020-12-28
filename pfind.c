@@ -64,7 +64,7 @@ void printWithTs(char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     pthread_mutex_lock(&printLock);
-    printf("[%02x] : %lu : %d : ", pthread_self(), getNanoTs(), runningThreads);
+    printf("[%02x] : %lu : %d : %d : ", pthread_self(), getNanoTs(), runningThreads, failedThreads);
     vprintf(fmt, args);
     fflush(stdout);
     pthread_mutex_unlock(&printLock);
@@ -92,25 +92,6 @@ int unsafeGetQueueSize() {
 }
 
 /**
- * Safely return the amount of items in queue (lock only queue's size)
- */
-int getQueueSize() {
-#ifdef DEBUG
-    printWithTs("locking queue for queue size (read)\n");
-#endif
-    pthread_rwlock_rdlock(&queueRWLock);
-    int size = unsafeGetQueueSize();
-#ifdef DEBUG
-    printWithTs("unlocking queue for queue size (read)\n");
-#endif
-    pthread_rwlock_unlock(&queueRWLock);
-#ifdef DEBUG
-    printWithTs("done unlocking queue for queue size (read)\n");
-#endif
-    return size;
-}
-
-/**
  * return first item in queue, NULL if empty
  */
 char *unsafeDeQueue() {
@@ -132,18 +113,24 @@ char *unsafeDeQueue() {
 
 
 void incRunningThreads() {
+#ifdef DEBUG
+    printWithTs("(inc) unlocking wr runningThreadsLock\n");
+#endif
     pthread_rwlock_wrlock(&runningThreadsLock);
+#ifdef DEBUG
+    printWithTs("(inc) done unlocking wr runningThreadsLock\n");
+#endif
     runningThreads++;
     pthread_rwlock_unlock(&runningThreadsLock);
 }
 
 void decRunningThreads() {
 #ifdef DEBUG
-    printWithTs("unlocking wr runningThreadsLock\n");
+    printWithTs("(dec) unlocking wr runningThreadsLock\n");
 #endif
     pthread_rwlock_wrlock(&runningThreadsLock);
 #ifdef DEBUG
-    printWithTs("done unlocking wr runningThreadsLock\n");
+    printWithTs("(dec) done unlocking wr runningThreadsLock\n");
 #endif
     runningThreads--;
     pthread_rwlock_unlock(&runningThreadsLock);
@@ -197,7 +184,7 @@ void unsafeEnQueue(char *str) {
 void enQueue(char *str) {
 
 #ifdef DEBUG
-    printWithTs("locking queue for enqueueing (read/write)\n");
+    printWithTs("locking queue for enqueueing queueRWLock (read/write)\n");
 #endif
     pthread_rwlock_wrlock(&queueRWLock);
     int isAllowedToHandle = unsafeIsAllowedToHandle();
@@ -206,10 +193,9 @@ void enQueue(char *str) {
 #ifdef DEBUG
     printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
-    pthread_cond_signal(&queueConsumableCond);
     pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
-    printWithTs("done unlocking queue for enqueueing (read/write)\n");
+    printWithTs("done unlocking queue for enqueueing queueRWLock (read/write)\n");
 #endif
     if (!isAllowedToHandle) {
         sched_yield();
@@ -233,17 +219,17 @@ char *deQueue() {
 #endif
     pthread_mutex_unlock(&queueLock);
 #ifdef DEBUG
-    printWithTs("locking queue for dequeueing (read/write)\n");
+    printWithTs("locking queue for dequeueing  queueRWLock(read/write)\n");
 #endif
     pthread_rwlock_wrlock(&queueRWLock);
     incRunningThreads();
     char *path = unsafeDeQueue();
 #ifdef DEBUG
-    printWithTs("unlocking queue for dequeueing (read/write). Now size is %d\n", unsafeGetQueueSize());
+    printWithTs("unlocking queue for dequeueing queueRWLock (read/write). Now size is %d, current item is: %p\n", unsafeGetQueueSize(), path);
 #endif
     pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
-    printWithTs("done unlocking queue for dequeueing (read/write)\n");
+    printWithTs("done unlocking queue for dequeueing queueRWLock (read/write)\n");
 #endif
     return path;
 }
@@ -408,20 +394,18 @@ void handleDirectory(char *path, char *searchTerm) {
 
 int isDone() {
 #ifdef DEBUG
-    printWithTs("(isDone) locking queue read lock\n");
+    printWithTs("(isDone) locking queue read lock queueRWLock\n");
 #endif
     pthread_rwlock_rdlock(&queueRWLock);
 #ifdef DEBUG
     printWithTs("(isDone) locking running threads\n");
 #endif
-    pthread_rwlock_rdlock(&runningThreadsLock);
     int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
 #ifdef DEBUG
     printWithTs("(isDone) unlocking running threads\n");
 #endif
-    pthread_rwlock_unlock(&runningThreadsLock);
 #ifdef DEBUG
-    printWithTs("(isDone) unlocking queue read lock\n");
+    printWithTs("(isDone) unlocking queue read lock queueRWLock\n");
 #endif
     pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
