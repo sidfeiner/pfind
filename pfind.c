@@ -114,13 +114,6 @@ QueueItem *unsafePeek() {
     return queue->first;
 }
 
-QueueItem *peek() {
-    pthread_rwlock_rdlock(&queueRWLock);
-    QueueItem *item = unsafePeek();
-    pthread_rwlock_unlock(&queueRWLock);
-    return item;
-}
-
 /**
  * Add string item to queue
  */
@@ -186,7 +179,13 @@ void incRunningThreads() {
 }
 
 void decRunningThreads() {
+#ifdef DEBUG
+    printWithTs("unlocking wr runningThreadsLock\n");
+#endif
     pthread_rwlock_wrlock(&runningThreadsLock);
+#ifdef DEBUG
+    printWithTs("done unlocking wr runningThreadsLock\n");
+#endif
     runningThreads--;
     pthread_rwlock_unlock(&runningThreadsLock);
 }
@@ -347,6 +346,9 @@ int hasReadPermission(char *path) {
  */
 void handleEntry(char *dir, dirent *entry, char *searchTerm) {
     char *newPath;
+#ifdef DEBUG
+    printWithTs("handling entry %s\n", entry->d_name);
+#endif
     if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
         newPath = pathJoin(dir, entry->d_name);
         switch (getTypeFromDirent(entry)) {
@@ -369,6 +371,9 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 break;
         }
     }
+#ifdef DEBUG
+    printWithTs("done handling entry %s\n", entry->d_name);
+#endif
 }
 
 /**
@@ -396,7 +401,7 @@ void handleDirectory(char *path, char *searchTerm) {
         handleEntry(path, entry, searchTerm);
     }
 #ifdef DEBUG
-    printWithTs("decreasing\n");
+    printWithTs("done handling directory, decreasing\n");
 #endif
     decRunningThreads(); // Thread is done handling everything
 #ifdef DEBUG
@@ -411,11 +416,26 @@ void handleDirectory(char *path, char *searchTerm) {
 }
 
 int isDone() {
+#ifdef DEBUG
+    printWithTs("(isDone) locking queue read lock\n");
+#endif
     pthread_rwlock_rdlock(&queueRWLock);
+#ifdef DEBUG
+    printWithTs("(isDone) locking running threads\n");
+#endif
     pthread_rwlock_rdlock(&runningThreadsLock);
     int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
+#ifdef DEBUG
+    printWithTs("(isDone) unlocking running threads\n");
+#endif
     pthread_rwlock_unlock(&runningThreadsLock);
+#ifdef DEBUG
+    printWithTs("(isDone) unlocking queue read lock\n");
+#endif
     pthread_rwlock_unlock(&queueRWLock);
+#ifdef DEBUG
+    printWithTs("(isDone) done\n");
+#endif
     return isDone;
 }
 
@@ -426,6 +446,9 @@ int isDone() {
  */
 void *threadMain(void *searchTerm) {
     char *path;
+#ifdef DEBUG
+    printWithTs("locking start lock\n");
+#endif
     pthread_mutex_lock(&startLock);
     createdProcesses++;
     if (createdProcesses == parallelism) {
@@ -497,8 +520,8 @@ void waitForThreads(pthread_t *threads) {
  * Init mutexes and condition variables
  */
 void initThreadingVars() {
-    pthread_mutex_init(&queueLock, NULL);
     pthread_mutex_init(&startLock, NULL);
+    pthread_mutex_init(&queueLock, NULL);
     pthread_rwlock_init(&runningThreadsLock, NULL);
     pthread_rwlock_init(&queueRWLock, NULL);
 #ifdef DEBUG
