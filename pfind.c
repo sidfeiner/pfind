@@ -31,9 +31,10 @@ typedef struct queue {
 Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLock;
-pthread_rwlock_t rwLock;
+pthread_rwlock_t runningThreadsLock;
+pthread_rwlock_t queueRWLock;
 
-atomic_int parallelism;
+int parallelism;
 pthread_cond_t queueConsumableCond;
 pthread_cond_t doneInitCond;
 atomic_int threadsSignaled;
@@ -64,9 +65,9 @@ int unsafeGetQueueSize() {
  * Safely return the amount of items in queue (lock only queue's size)
  */
 int getQueueSize() {
-    pthread_rwlock_rdlock(&rwLock);
+    pthread_rwlock_rdlock(&queueRWLock);
     int size = unsafeGetQueueSize();
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
     return size;
 }
 
@@ -75,9 +76,9 @@ QueueItem *unsafePeek() {
 }
 
 QueueItem *peek() {
-    pthread_rwlock_rdlock(&rwLock);
+    pthread_rwlock_rdlock(&queueRWLock);
     QueueItem *item = unsafePeek();
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
     return item;
 }
 
@@ -102,10 +103,10 @@ void unsafeEnQueue(char *str) {
  *  Add item to queue
  */
 void enQueue(char *str) {
-    pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&queueRWLock);
     unsafeEnQueue(str);
     pthread_cond_signal(&queueConsumableCond);
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
 }
 
 /**
@@ -128,6 +129,27 @@ char *unsafeDeQueue() {
     return value;
 }
 
+
+void incRunningThreads() {
+    pthread_rwlock_wrlock(&runningThreadsLock);
+    runningThreads++;
+    pthread_rwlock_unlock(&runningThreadsLock);
+}
+
+void decRunningThreads() {
+    pthread_rwlock_wrlock(&runningThreadsLock);
+    runningThreads--;
+    pthread_rwlock_unlock(&runningThreadsLock);
+}
+
+int getRunningThreads() {
+    pthread_rwlock_rdlock(&runningThreadsLock);
+    int res = runningThreads;
+    pthread_rwlock_unlock(&runningThreadsLock);
+    return res;
+}
+
+
 /**
  * Returns if the thread is allowed to handle this item.
  * Returns true if:
@@ -139,7 +161,7 @@ char *unsafeDeQueue() {
  */
 int isAllowedToHandle(QueueItem *item) {
     return parallelism == 1 || item->tId != pthread_self() ||
-           (parallelism - runningThreads - failedThreads - 1) == 0;
+           (parallelism - getRunningThreads() - failedThreads - 1) == 0;
 }
 
 /**
@@ -148,18 +170,18 @@ int isAllowedToHandle(QueueItem *item) {
 char *deQueue() {
     char *path;
     pthread_mutex_lock(&queueLock);
-    while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
+    while (unsafeGetQueueSize() == 0 && getRunningThreads() > 0) {
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
     pthread_mutex_unlock(&queueLock);
-    pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&queueRWLock);
     QueueItem *item = unsafePeek();
     if (item == NULL || !isAllowedToHandle(item)) {
         path = NULL;
     } else {
         path = unsafeDeQueue();
     }
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
     return path;
 }
 
@@ -334,12 +356,12 @@ void *threadMain(void *searchTerm) {
     while (1) {
         path = deQueue();
         if (path != NULL) {
-            runningThreads++;
+            incRunningThreads();
             handleDirectory(path, (char *) searchTerm);
             free(path);
-            runningThreads--;
+            decRunningThreads();
         }
-        if (runningThreads == 0 && getQueueSize() == 0) {
+        if (getQueueSize() == 0 && runningThreads == 0) {
             pthread_cond_broadcast(&queueConsumableCond);
             break;
         }
@@ -379,7 +401,8 @@ void waitForThreads(pthread_t *threads) {
 void initThreadingVars() {
     pthread_mutex_init(&queueLock, NULL);
     pthread_mutex_init(&startLock, NULL);
-    pthread_rwlock_init(&rwLock, NULL);
+    pthread_rwlock_init(&runningThreadsLock, NULL);
+    pthread_rwlock_init(&queueRWLock, NULL);
     pthread_cond_init(&queueConsumableCond, NULL);
     pthread_cond_init(&doneInitCond, NULL);
 }
@@ -390,7 +413,8 @@ void initThreadingVars() {
 void destroyThreadingVars() {
     pthread_mutex_destroy(&queueLock);
     pthread_mutex_destroy(&startLock);
-    pthread_rwlock_destroy(&rwLock);
+    pthread_rwlock_destroy(&runningThreadsLock);
+    pthread_rwlock_destroy(&queueRWLock);
     pthread_cond_destroy(&queueConsumableCond);
     pthread_cond_destroy(&doneInitCond);
 }

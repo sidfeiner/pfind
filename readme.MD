@@ -98,24 +98,24 @@ read the queue size.
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
     pthread_mutex_unlock(&queueLock);
-    pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&queueRWLock);
     char *path = unsafeDeQueue();
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
   ```
 
 ##### ReadWrite Locks
 They works very similarly to mutexes. Use the following functions:
 ```
-pthread_rwlock_t rwLock;
-pthread_rwlock_init(&rwLock, NULL);
+pthread_rwlock_t queueRWLock;
+pthread_rwlock_init(&queueRWLock, NULL);
 
-pthread_rwlock_rdlock(&rwLock);
+pthread_rwlock_rdlock(&queueRWLock);
 // ... read only actions ...
-pthread_rwlock_unlock(&rwLock);
+pthread_rwlock_unlock(&queueRWLock);
 
-pthread_rwlock_wrlock(&rwLock);
+pthread_rwlock_wrlock(&queueRWLock);
 // ... read/write actions ...
-pthread_rwlock_unlock(&rwLock);
+pthread_rwlock_unlock(&queueRWLock);
 
-pthread_rwlock_destroy(&rwLock);
+pthread_rwlock_destroy(&queueRWLock);
 ```
