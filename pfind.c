@@ -63,7 +63,7 @@ void printWithTs(char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
     pthread_mutex_lock(&printLock);
-    printf("[%02x] : %lu : ", pthread_self(), getNanoTs());
+    printf("[%02x] : %lu : %d : ", pthread_self(), getNanoTs(), runningThreads);
     vprintf(fmt, args);
     pthread_mutex_unlock(&printLock);
     va_end(args);
@@ -412,7 +412,10 @@ void *threadMain(void *searchTerm) {
             free(path);
             runningThreads--;
         }
-        if (runningThreads == 0 && getQueueSize() == 0) {
+#ifdef DEBUG
+        printWithTs("checking if done\n");
+#endif
+        if (getQueueSize() == 0 && runningThreads == 0) {
 #ifdef DEBUG
             printWithTs("done going over all queue, broadcasting everyone to continue\n");
 #endif
