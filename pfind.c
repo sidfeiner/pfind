@@ -18,7 +18,6 @@ typedef struct dirent dirent;
 
 typedef struct queueItem {
     char *value;
-    pthread_t tId;
     struct queueItem *next;
 } QueueItem;
 
@@ -71,44 +70,6 @@ int getQueueSize() {
     return size;
 }
 
-QueueItem *unsafePeek() {
-    return queue->first;
-}
-
-QueueItem *peek() {
-    pthread_rwlock_rdlock(&queueRWLock);
-    QueueItem *item = unsafePeek();
-    pthread_rwlock_unlock(&queueRWLock);
-    return item;
-}
-
-/**
- * Add string item to queue
- */
-void unsafeEnQueue(char *str) {
-    QueueItem *qItem = malloc(sizeof(QueueItem));
-    qItem->next = NULL;
-    qItem->value = str;
-    qItem->tId = pthread_self();
-    if (queue->size == 0) {
-        queue->first = qItem;
-    } else {
-        queue->last->next = qItem;
-    }
-    queue->last = qItem;
-    queue->size++;
-}
-
-/**
- *  Add item to queue
- */
-void enQueue(char *str) {
-    pthread_rwlock_wrlock(&queueRWLock);
-    unsafeEnQueue(str);
-    pthread_cond_signal(&queueConsumableCond);
-    pthread_rwlock_unlock(&queueRWLock);
-}
-
 /**
  * return first item in queue, NULL if empty
  */
@@ -154,34 +115,59 @@ int getRunningThreads() {
  * Returns if the thread is allowed to handle this item.
  * Returns true if:
  *  1. parallelism is 1, so he MUST handle the item
- *  2. current thread did not enqueue this item
+ *  2. queue is not empty, so other waiting thread should not be waiting
  *  3. There is nobody else waiting to consume (everybody is busy)
  *
  *  Otherwise returns false
  */
-int isAllowedToHandle(QueueItem *item) {
-    return parallelism == 1 || item->tId != pthread_self() ||
-           (parallelism - getRunningThreads() - failedThreads - 1) == 0;
+int unsafeIsAllowedToHandle() {
+    return parallelism == 1 || unsafeGetQueueSize() > 0 || (parallelism - getRunningThreads() - failedThreads - 1) == 0;
 }
+
+
+/**
+ * Add string item to queue
+ */
+void unsafeEnQueue(char *str) {
+    QueueItem *qItem = malloc(sizeof(QueueItem));
+    qItem->next = NULL;
+    qItem->value = str;
+    if (queue->size == 0) {
+        queue->first = qItem;
+    } else {
+        queue->last->next = qItem;
+    }
+    queue->last = qItem;
+    queue->size++;
+}
+
+/**
+ *  Add item to queue
+ */
+void enQueue(char *str) {
+    pthread_rwlock_wrlock(&queueRWLock);
+    int isAllowedToHandle = unsafeIsAllowedToHandle();
+    unsafeEnQueue(str);
+    pthread_cond_signal(&queueConsumableCond);
+    pthread_rwlock_unlock(&queueRWLock);
+    if (!isAllowedToHandle) {
+        sched_yield();
+    }
+}
+
 
 /**
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
-    char *path;
     pthread_mutex_lock(&queueLock);
     while (unsafeGetQueueSize() == 0 && getRunningThreads() > 0) {
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
     pthread_mutex_unlock(&queueLock);
     pthread_rwlock_wrlock(&queueRWLock);
-    QueueItem *item = unsafePeek();
-    if (item == NULL || !isAllowedToHandle(item)) {
-        path = NULL;
-    } else {
-        incRunningThreads();
-        path = unsafeDeQueue();
-    }
+    pthread_rwlock_wrlock(&queueRWLock);
+    char *path = unsafeDeQueue();
     pthread_rwlock_unlock(&queueRWLock);
     return path;
 }
@@ -369,8 +355,6 @@ void *threadMain(void *searchTerm) {
         if (path != NULL) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
-        } else {
-            sched_yield();  // Try and improve chances of another thread handling current file
         }
         if (isDone()) {
             pthread_cond_broadcast(&queueConsumableCond);
