@@ -17,7 +17,7 @@ from typing import List, Dict
 
 logging.basicConfig(format="%(msg)s", stream=sys.stdout, level='DEBUG' if '--debug' in sys.argv else 'INFO')
 
-TIMEOUT_SECONDS = 15
+TIMEOUT_SECONDS = 20
 PFIND_EXEC = "./pfind"
 TEST_DIR = "test_filesystem"
 MAX_WORD_SIZE = 10
@@ -333,7 +333,7 @@ def reset_test_dir():
     os.mkdir(TEST_DIR)
 
 
-def test_case(with_link: bool, with_unsearchable_dir: bool):
+def test_case(with_link: bool, with_unsearchable_dir: bool, timeout: int):
     tests_amt = 0
     failed_amt = 0
     match_files_amt = random.randint(3, MAX_MATCHES_AMOUNT)
@@ -348,7 +348,7 @@ def test_case(with_link: bool, with_unsearchable_dir: bool):
     for parallelism in parallelism_generator():
         tests_amt += 1
         cmd = f"""{PFIND_EXEC} {TEST_DIR} "{search_term}" {parallelism}"""
-        success, output = run_command(cmd)
+        success, output = run_command(cmd, timeout)
         if not success:
             logging.warning(f"!!!!!!!!!! WARNING !!!!!!!!!!")
             logging.warning(f"code returned non-zero exit code")
@@ -358,32 +358,32 @@ def test_case(with_link: bool, with_unsearchable_dir: bool):
     return tests_amt, failed_amt
 
 
-def test_normal_run():
+def test_normal_run(timeout: int):
     logging.info("------------------------")
     logging.info("Normal test run")
     logging.info("------------------------")
-    return test_case(False, False)
+    return test_case(False, False, timeout)
 
 
-def test_links_run():
+def test_links_run(timeout: int):
     logging.info("------------------------")
     logging.info("Links test run")
     logging.info("------------------------")
-    return test_case(True, False)
+    return test_case(True, False, timeout)
 
 
-def test_unsearchable_dir_run():
+def test_unsearchable_dir_run(timeout: int):
     logging.info("------------------------")
     logging.info("Unsearchable dir test run")
     logging.info("------------------------")
-    return test_case(False, True)
+    return test_case(False, True, timeout)
 
 
-def test_all():
+def test_all(timeout: int):
     logging.info("------------------------")
     logging.info("Links and unsearchable dir test run")
     logging.info("------------------------")
-    return test_case(True, True)
+    return test_case(True, True, timeout)
 
 
 def test_non_existing_dir():
@@ -417,10 +417,10 @@ def test_bad_root_dir():
     test_file_as_root_dir()
 
 
-def run_command(command) -> (bool, List[str]):
+def run_command(command, timeout: int = TIMEOUT_SECONDS) -> (bool, List[str]):
     logging.debug(f"running command: {command}")
     try:
-        output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=TIMEOUT_SECONDS)
+        output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=timeout)
         return True, output.strip().decode().split('\n')
     except subprocess.CalledProcessError as e:
         return False, e.output.strip().decode().split('\n')
@@ -433,27 +433,27 @@ def run_command(command) -> (bool, List[str]):
         exit(1)
 
 
-def run_all_tests():
+def run_all_tests(timeout: int):
     logging.info("running...")
     test_bad_root_dir()
 
     tests_amt = 0
     failed_amt = 0
     for _ in range(20):
-        total_normal, failed_normal = test_normal_run()
-        total_links, failed_links = test_links_run()
-        total_unsearchable, failed_unsearchable = test_unsearchable_dir_run()
-        total_all, failed_all = test_all()
+        total_normal, failed_normal = test_normal_run(timeout)
+        total_links, failed_links = test_links_run(timeout)
+        total_unsearchable, failed_unsearchable = test_unsearchable_dir_run(timeout)
+        total_all, failed_all = test_all(timeout)
         tests_amt += total_normal + total_links + total_unsearchable + total_all
         failed_amt += failed_normal + failed_links + failed_unsearchable + failed_all
     return tests_amt, failed_amt
 
 
-def run():
+def run(timeout_secs: int):
     logging.info("compiling...")
     compiler = "gcc-5.3.0" if 'nova' in platform.node() else 'gcc'
     success, output = run_command(
-        f"{compiler} -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread pfind.c -o {PFIND_EXEC}")
+        f"{compiler} -O3 -D_POSIX_C_SOURCE=200809 -Wall -std=c11 -pthread pfind.c -o {PFIND_EXEC}", timeout)
     if not success:
         logging.error("compile unsuccessfull, output:")
         for line in output:
@@ -461,7 +461,7 @@ def run():
         exit(1)
 
     start_ts = datetime.now()
-    tests_amt, failed_amt = run_all_tests()
+    tests_amt, failed_amt = run_all_tests(timeout)
     end_ts = datetime.now()
 
     if failed_amt > 0:
@@ -470,9 +470,11 @@ def run():
         logging.warning(f"But if your code got here, at least that means that the output was always correct")
     logging.info("WHO DA BEST??!! YOU DA BEST!!!! ")
     logging.info("You passed the tests, kululululululu")
-    logging.info(f"And by the way, it took {(end_ts - start_ts).total_seconds()} seconds to run, if you want to compare zragim with others")
+    logging.info(
+        f"And by the way, it took {(end_ts - start_ts).total_seconds()} seconds to run, if you want to compare zragim with others")
     logging.info("But remember this tester is random so comparing time isn't very effective")
 
 
 if __name__ == '__main__':
-    run()
+    timeout = int(sys.argv[1]) if len(sys.argv) > 1 else TIMEOUT_SECONDS
+    run(timeout)
