@@ -12,6 +12,7 @@
 #ifdef DEBUG
 
 #include <stdarg.h>
+#include <stdint.h>
 
 #endif
 
@@ -386,9 +387,9 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
 void handleDirectory(char *path, char *searchTerm) {
     DIR *dir;
     dirent *entry;
-
+#ifdef DEBUG
     printWithTs("Handling directory: %s\n", path);
-
+#endif
     // Open directory
     if ((dir = opendir(path)) == NULL) {
         printf("Directory %s: Permission denied.\n", path);
