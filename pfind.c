@@ -39,9 +39,10 @@ Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLock;
 pthread_mutex_t printLock;
-pthread_rwlock_t rwLock;
+pthread_rwlock_t runningThreadsLock;
+pthread_rwlock_t queueRWLock;
 
-atomic_int parallelism;
+int parallelism;
 pthread_cond_t queueConsumableCond;
 pthread_cond_t doneInitCond;
 atomic_int threadsSignaled;
@@ -96,12 +97,12 @@ int getQueueSize() {
 #ifdef DEBUG
     printWithTs("locking queue for queue size (read)\n");
 #endif
-    pthread_rwlock_rdlock(&rwLock);
+    pthread_rwlock_rdlock(&queueRWLock);
     int size = unsafeGetQueueSize();
 #ifdef DEBUG
     printWithTs("unlocking queue for queue size (read)\n");
 #endif
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
     printWithTs("done unlocking queue for queue size (read)\n");
 #endif
@@ -113,9 +114,9 @@ QueueItem *unsafePeek() {
 }
 
 QueueItem *peek() {
-    pthread_rwlock_rdlock(&rwLock);
+    pthread_rwlock_rdlock(&queueRWLock);
     QueueItem *item = unsafePeek();
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
     return item;
 }
 
@@ -143,13 +144,13 @@ void enQueue(char *str) {
 #ifdef DEBUG
     printWithTs("locking queue for enqueueing (read/write)\n");
 #endif
-    pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&queueRWLock);
     unsafeEnQueue(str);
     pthread_cond_signal(&queueConsumableCond);
 #ifdef DEBUG
     printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
     printWithTs("done unlocking queue for enqueueing (read/write)\n");
 #endif
@@ -176,6 +177,31 @@ char *unsafeDeQueue() {
     return value;
 }
 
+
+void incRunningThreads() {
+    pthread_rwlock_wrlock(&runningThreadsLock);
+    runningThreads++;
+    pthread_rwlock_unlock(&runningThreadsLock);
+}
+
+void decRunningThreads() {
+    pthread_rwlock_wrlock(&runningThreadsLock);
+    runningThreads--;
+    pthread_rwlock_unlock(&runningThreadsLock);
+}
+
+int unsafeGetRunningThreads() {
+    return runningThreads;
+}
+
+int getRunningThreads() {
+    pthread_rwlock_rdlock(&runningThreadsLock);
+    int res = unsafeGetRunningThreads();
+    pthread_rwlock_unlock(&runningThreadsLock);
+    return res;
+}
+
+
 /**
  * Returns if the thread is allowed to handle this item.
  * Returns true if:
@@ -187,7 +213,7 @@ char *unsafeDeQueue() {
  */
 int isAllowedToHandle(QueueItem *item) {
     return parallelism == 1 || item->tId != pthread_self() ||
-           (parallelism - runningThreads - failedThreads - 1) == 0;
+           (parallelism - getRunningThreads() - failedThreads - 1) == 0;
 }
 
 /**
@@ -199,7 +225,7 @@ char *deQueue() {
     printWithTs("locking for cond var dequeueing\n");
 #endif
     pthread_mutex_lock(&queueLock);
-    while (unsafeGetQueueSize() == 0 && runningThreads > 0) {
+    while (unsafeGetQueueSize() == 0 && getRunningThreads() > 0) {
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
 #ifdef DEBUG
@@ -209,17 +235,18 @@ char *deQueue() {
 #ifdef DEBUG
     printWithTs("locking queue for dequeueing (read/write)\n");
 #endif
-    pthread_rwlock_wrlock(&rwLock);
+    pthread_rwlock_wrlock(&queueRWLock);
     QueueItem *item = unsafePeek();
     if (item == NULL || !isAllowedToHandle(item)) {
         path = NULL;
     } else {
+        incRunningThreads();
         path = unsafeDeQueue();
     }
 #ifdef DEBUG
     printWithTs("unlocking queue for dequeueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
-    pthread_rwlock_unlock(&rwLock);
+    pthread_rwlock_unlock(&queueRWLock);
 #ifdef DEBUG
     printWithTs("done unlocking queue for dequeueing (read/write)\n");
 #endif
@@ -367,13 +394,28 @@ void handleDirectory(char *path, char *searchTerm) {
     while ((entry = readdir(dir)) != NULL) {
         handleEntry(path, entry, searchTerm);
     }
-
+#ifdef DEBUG
+    printWithTs("decreasing\n");
+#endif
+    decRunningThreads(); // Thread is done handling everything
+#ifdef DEBUG
+    printWithTs("done decreasing\n");
+#endif
     // Close directory
     closedir(dir);
     if (errno != 0) {
         printf("failed reading dir %s\n", path);
         killThread();
     }
+}
+
+int isDone() {
+    pthread_rwlock_rdlock(&queueRWLock);
+    pthread_rwlock_rdlock(&runningThreadsLock);
+    int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
+    pthread_rwlock_unlock(&runningThreadsLock);
+    pthread_rwlock_unlock(&queueRWLock);
+    return isDone;
 }
 
 /**
@@ -407,15 +449,15 @@ void *threadMain(void *searchTerm) {
     while (1) {
         path = deQueue();
         if (path != NULL) {
-            runningThreads++;
             handleDirectory(path, (char *) searchTerm);
             free(path);
-            runningThreads--;
+        } else {
+            sched_yield();  // Try and improve chances of another thread handling current file
         }
 #ifdef DEBUG
         printWithTs("checking if done\n");
 #endif
-        if (getQueueSize() == 0 && runningThreads == 0) {
+        if (isDone()) {
 #ifdef DEBUG
             printWithTs("done going over all queue, broadcasting everyone to continue\n");
 #endif
@@ -458,7 +500,8 @@ void waitForThreads(pthread_t *threads) {
 void initThreadingVars() {
     pthread_mutex_init(&queueLock, NULL);
     pthread_mutex_init(&startLock, NULL);
-    pthread_rwlock_init(&rwLock, NULL);
+    pthread_rwlock_init(&runningThreadsLock, NULL);
+    pthread_rwlock_init(&queueRWLock, NULL);
 #ifdef DEBUG
     printWithTs("initing queueConsumableCond condition variable\n");
 #endif
@@ -473,7 +516,8 @@ void destroyThreadingVars() {
     pthread_mutex_destroy(&printLock);
     pthread_mutex_destroy(&queueLock);
     pthread_mutex_destroy(&startLock);
-    pthread_rwlock_destroy(&rwLock);
+    pthread_rwlock_destroy(&runningThreadsLock);
+    pthread_rwlock_destroy(&queueRWLock);
     pthread_cond_destroy(&queueConsumableCond);
     pthread_cond_destroy(&doneInitCond);
 }
