@@ -26,7 +26,6 @@ typedef struct dirent dirent;
 
 typedef struct queueItem {
     char *value;
-    pthread_t tId;
     struct queueItem *next;
 } QueueItem;
 
@@ -109,10 +108,6 @@ int getQueueSize() {
     printWithTs("done unlocking queue for queue size (read)\n");
 #endif
     return size;
-}
-
-QueueItem *unsafePeek() {
-    return queue->first;
 }
 
 /**
