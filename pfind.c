@@ -66,6 +66,7 @@ void printWithTs(char *fmt, ...) {
     pthread_mutex_lock(&printLock);
     printf("[%02x] : %lu : %d : ", pthread_self(), getNanoTs(), runningThreads);
     vprintf(fmt, args);
+    fflush(stdout);
     pthread_mutex_unlock(&printLock);
     va_end(args);
 }
@@ -451,8 +452,6 @@ void *threadMain(void *searchTerm) {
         if (path != NULL) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
-        } else {
-            sched_yield();  // Try and improve chances of another thread handling current file
         }
 #ifdef DEBUG
         printWithTs("checking if done\n");
