@@ -116,43 +116,6 @@ QueueItem *unsafePeek() {
 }
 
 /**
- * Add string item to queue
- */
-void unsafeEnQueue(char *str) {
-    QueueItem *qItem = malloc(sizeof(QueueItem));
-    qItem->next = NULL;
-    qItem->value = str;
-    qItem->tId = pthread_self();
-    if (queue->size == 0) {
-        queue->first = qItem;
-    } else {
-        queue->last->next = qItem;
-    }
-    queue->last = qItem;
-    queue->size++;
-}
-
-/**
- *  Add item to queue
- */
-void enQueue(char *str) {
-#ifdef DEBUG
-    printWithTs("locking queue for enqueueing (read/write)\n");
-#endif
-    pthread_rwlock_wrlock(&queueRWLock);
-    unsafeEnQueue(str);
-    pthread_cond_signal(&queueConsumableCond);
-#ifdef DEBUG
-    printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
-#endif
-    pthread_rwlock_unlock(&queueRWLock);
-#ifdef DEBUG
-    printWithTs("done unlocking queue for enqueueing (read/write)\n");
-#endif
-    pthread_cond_signal(&queueConsumableCond);
-}
-
-/**
  * return first item in queue, NULL if empty
  */
 char *unsafeDeQueue() {
@@ -207,21 +170,62 @@ int getRunningThreads() {
  * Returns if the thread is allowed to handle this item.
  * Returns true if:
  *  1. parallelism is 1, so he MUST handle the item
- *  2. current thread did not enqueue this item
+ *  2. queue is not empty, so other waiting thread should not be waiting
  *  3. There is nobody else waiting to consume (everybody is busy)
  *
  *  Otherwise returns false
  */
-int isAllowedToHandle(QueueItem *item) {
-    return parallelism == 1 || item->tId != pthread_self() ||
-           (parallelism - getRunningThreads() - failedThreads - 1) == 0;
+int unsafeIsAllowedToHandle() {
+    return parallelism == 1 || unsafeGetQueueSize() > 0 || (parallelism - getRunningThreads() - failedThreads - 1) == 0;
 }
+
+
+/**
+ * Add string item to queue
+ */
+void unsafeEnQueue(char *str) {
+    QueueItem *qItem = malloc(sizeof(QueueItem));
+    qItem->next = NULL;
+    qItem->value = str;
+    if (queue->size == 0) {
+        queue->first = qItem;
+    } else {
+        queue->last->next = qItem;
+    }
+    queue->last = qItem;
+    queue->size++;
+}
+
+/**
+ *  Add item to queue
+ */
+void enQueue(char *str) {
+
+#ifdef DEBUG
+    printWithTs("locking queue for enqueueing (read/write)\n");
+#endif
+    pthread_rwlock_wrlock(&queueRWLock);
+    int isAllowedToHandle = unsafeIsAllowedToHandle();
+    unsafeEnQueue(str);
+    pthread_cond_signal(&queueConsumableCond);
+#ifdef DEBUG
+    printWithTs("unlocking queue for enqueueing (read/write). Now size is %d\n", unsafeGetQueueSize());
+#endif
+    pthread_cond_signal(&queueConsumableCond);
+    pthread_rwlock_unlock(&queueRWLock);
+#ifdef DEBUG
+    printWithTs("done unlocking queue for enqueueing (read/write)\n");
+#endif
+    if (!isAllowedToHandle) {
+        sched_yield();
+    }
+}
+
 
 /**
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
-    char *path;
 #ifdef DEBUG
     printWithTs("locking for cond var dequeueing\n");
 #endif
@@ -237,13 +241,8 @@ char *deQueue() {
     printWithTs("locking queue for dequeueing (read/write)\n");
 #endif
     pthread_rwlock_wrlock(&queueRWLock);
-    QueueItem *item = unsafePeek();
-    if (item == NULL || !isAllowedToHandle(item)) {
-        path = NULL;
-    } else {
-        incRunningThreads();
-        path = unsafeDeQueue();
-    }
+    incRunningThreads();
+    char *path = unsafeDeQueue();
 #ifdef DEBUG
     printWithTs("unlocking queue for dequeueing (read/write). Now size is %d\n", unsafeGetQueueSize());
 #endif
@@ -402,11 +401,7 @@ void handleDirectory(char *path, char *searchTerm) {
         handleEntry(path, entry, searchTerm);
     }
 #ifdef DEBUG
-    printWithTs("done handling directory, decreasing\n");
-#endif
-    decRunningThreads(); // Thread is done handling everything
-#ifdef DEBUG
-    printWithTs("done decreasing\n");
+    printWithTs("done handling directory\n");
 #endif
     // Close directory
     closedir(dir);
@@ -477,6 +472,7 @@ void *threadMain(void *searchTerm) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
         }
+        decRunningThreads(); // Thread is done handling everything
 #ifdef DEBUG
         printWithTs("checking if done\n");
 #endif
