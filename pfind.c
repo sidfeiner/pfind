@@ -327,9 +327,7 @@ void handleDirectory(char *path, char *searchTerm) {
 
 int isDone() {
     pthread_rwlock_rdlock(&queueRWLock);
-    pthread_rwlock_rdlock(&runningThreadsLock);
     int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
-    pthread_rwlock_unlock(&runningThreadsLock);
     pthread_rwlock_unlock(&queueRWLock);
     return isDone;
 }
