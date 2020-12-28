@@ -360,6 +360,8 @@ void *threadMain(void *searchTerm) {
         if (path != NULL) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
+        } else {
+            sched_yield();  // Try and improve chances of another thread handling current file
         }
         if (getQueueSize() == 0 && runningThreads == 0) {
             pthread_cond_broadcast(&queueConsumableCond);
