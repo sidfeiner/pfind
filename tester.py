@@ -6,6 +6,7 @@ import re
 import shutil
 import stat
 import subprocess
+from datetime import datetime
 from subprocess import check_output
 import shlex
 import sys
@@ -41,7 +42,7 @@ def build_valid_chars():
 
 valid_file_chars = build_valid_chars()
 
-#TODO: Adapt range of yield 2
+
 def parallelism_generator():
     for _ in range(10):
         yield 1
@@ -431,6 +432,7 @@ def run_command(command) -> (bool, List[str]):
         logging.error(f"So you can rerun the command by yourself to debug: {command}")
         exit(1)
 
+
 def run_all_tests():
     logging.info("running...")
     test_bad_root_dir()
@@ -446,6 +448,7 @@ def run_all_tests():
         failed_amt += failed_normal + failed_links + failed_unsearchable + failed_all
     return tests_amt, failed_amt
 
+
 def run():
     logging.info("compiling...")
     compiler = "gcc-5.3.0" if 'nova' in platform.node() else 'gcc'
@@ -457,13 +460,18 @@ def run():
             print(line)
         exit(1)
 
+    start_ts = datetime.now()
     tests_amt, failed_amt = run_all_tests()
+    end_ts = datetime.now()
 
     if failed_amt > 0:
         logging.warning(f"!!!!!!WARNING!!!!!!")
         logging.warning(f"{failed_amt}/{tests_amt} ended with exit code different than 1")
         logging.warning(f"But if your code got here, at least that means that the output was always correct")
-    logging.info("You've passed all the tests, Halleluyaaaaaaaaaaa")
+    logging.info("WHO DA BEST??!! YOU DA BEST!!!! ")
+    logging.info("You passed the tests, kululululululu")
+    logging.info(f"And by the way, it took {(end_ts - start_ts).total_seconds()} seconds to run, if you want to compare zragim with others")
+    logging.info("But remember this tester is random so comparing time isn't very effective")
 
 
 if __name__ == '__main__':
