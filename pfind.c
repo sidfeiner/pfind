@@ -167,6 +167,7 @@ char *deQueue() {
     pthread_mutex_unlock(&queueLock);
     pthread_rwlock_wrlock(&queueRWLock);
     pthread_rwlock_wrlock(&queueRWLock);
+    incRunningThreads();
     char *path = unsafeDeQueue();
     pthread_rwlock_unlock(&queueRWLock);
     return path;
@@ -312,7 +313,6 @@ void handleDirectory(char *path, char *searchTerm) {
     while ((entry = readdir(dir)) != NULL) {
         handleEntry(path, entry, searchTerm);
     }
-    decRunningThreads(); // Thread is done handling everything
 
     // Close directory
     closedir(dir);
@@ -356,6 +356,7 @@ void *threadMain(void *searchTerm) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
         }
+        decRunningThreads(); // Thread is done handling everything
         if (isDone()) {
             pthread_cond_broadcast(&queueConsumableCond);
             break;
