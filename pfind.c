@@ -103,9 +103,13 @@ void decRunningThreads() {
     pthread_rwlock_unlock(&runningThreadsLock);
 }
 
+int unsafeGetRunningThreads() {
+    return runningThreads;
+}
+
 int getRunningThreads() {
     pthread_rwlock_rdlock(&runningThreadsLock);
-    int res = runningThreads;
+    int res = unsafeGetRunningThreads();
     pthread_rwlock_unlock(&runningThreadsLock);
     return res;
 }
@@ -165,7 +169,6 @@ char *deQueue() {
         pthread_cond_wait(&queueConsumableCond, &queueLock);
     }
     pthread_mutex_unlock(&queueLock);
-    pthread_rwlock_wrlock(&queueRWLock);
     pthread_rwlock_wrlock(&queueRWLock);
     incRunningThreads();
     char *path = unsafeDeQueue();
