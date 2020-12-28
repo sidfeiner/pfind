@@ -336,6 +336,15 @@ void handleDirectory(char *path, char *searchTerm) {
     }
 }
 
+int isDone() {
+    pthread_rwlock_rdlock(&queueRWLock);
+    pthread_rwlock_rdlock(&runningThreadsLock);
+    int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
+    pthread_rwlock_unlock(&runningThreadsLock);
+    pthread_rwlock_unlock(&queueRWLock);
+    return isDone;
+}
+
 /**
  * Entry point for all threads
  * At first, thread will wait for condition that all threads have done being initiated,
@@ -363,7 +372,7 @@ void *threadMain(void *searchTerm) {
         } else {
             sched_yield();  // Try and improve chances of another thread handling current file
         }
-        if (getQueueSize() == 0 && runningThreads == 0) {
+        if (isDone()) {
             pthread_cond_broadcast(&queueConsumableCond);
             break;
         }

@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Dict
 
-logging.basicConfig(format="%(msg)s", level='DEBUG' if '--debug' in sys.argv else 'INFO')
+logging.basicConfig(format="%(msg)s", stream=sys.stdout, level='DEBUG' if '--debug' in sys.argv else 'INFO')
 
 TIMEOUT_SECONDS = 15
 PFIND_EXEC = "./pfind"
