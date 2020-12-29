@@ -158,6 +158,17 @@ def touch_file(path: str):
     return dir_path
 
 
+def ensure_generate_filesystem(match_files_amt: int, search_term: str, with_link: bool, with_unsearchable_dir: bool,
+                               max_retries: int = 5):
+    for _ in range(max_retries):
+        try:
+            return generate_filesystem(match_files_amt, search_term, with_link, with_unsearchable_dir)
+        except NotADirectoryError as e:
+            logging.warning("failed creating file system, retrying (don't worry, this is not your fault).")
+            reset_test_dir()
+    raise RuntimeError("Tester failed generating file system. This is NOT your fault! Just re-run the tester")
+
+
 def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool, with_unsearchable_dir: bool):
     files_amount = random.randint(match_files_amt, match_files_amt + 4000)
     max_dirs_amount = random.randint(2, MAX_DIRS_AMOUNT)
@@ -344,8 +355,8 @@ def test_case(with_link: bool, with_unsearchable_dir: bool, timeout: int):
         f"Generating file system with {match_files_amt} files that must be matched for search term {search_term}")
     reset_test_dir()
 
-    match_files, match_links, unsearchable_dirs = generate_filesystem(match_files_amt, search_term, with_link,
-                                                                      with_unsearchable_dir)
+    match_files, match_links, unsearchable_dirs = ensure_generate_filesystem(match_files_amt, search_term, with_link,
+                                                                             with_unsearchable_dir)
     logging.info("running on file system with many different parallelisms")
     for parallelism in parallelism_generator():
         tests_amt += 1
