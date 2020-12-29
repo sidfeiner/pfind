@@ -7,7 +7,6 @@ import shutil
 import stat
 import subprocess
 from datetime import datetime
-from subprocess import check_output
 import shlex
 import sys
 import platform
@@ -15,6 +14,8 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Dict
 
+IGNORE_DEBUG_PRINTS = True if '--ignore-debug-prints' in sys.argv else False
+IS_HARD = True if '--hard' in sys.argv else False
 logging.basicConfig(format="%(msg)s", stream=sys.stdout, level='DEBUG' if '--debug' in sys.argv else 'INFO')
 
 TIMEOUT_SECONDS = 20
@@ -46,13 +47,13 @@ valid_file_chars = build_valid_chars()
 def parallelism_generator():
     for _ in range(10):
         yield 1
-    for _ in range(50):
+    for _ in range(150 if IS_HARD else 50):
         yield 2
-    for i in range(10, 100, 25):
+    for i in range(10, 100, 10 if IS_HARD else 25):
         yield i
-    for i in range(100, 1000, 150):
+    for i in range(100, 1000, 50 if IS_HARD else 150):
         yield i
-    for i in range(1000, 4001, 500):
+    for i in range(1000, 4001, 100 if IS_HARD else 500):
         yield i
 
 
@@ -290,6 +291,8 @@ def info_redundant_prints(output: List[str], must_match_files: List[str], must_m
 
 def assert_correct_results(must_match_files: List[str], must_match_links: List[str], unsearchable_dirs: List[str],
                            output: List[str], search_term: str, original_cmd: str):
+    original_output = output
+    output = [line for line in output[:-1] if '***' not in line] + [output[-1]] if IGNORE_DEBUG_PRINTS else output
     total_matches = len(must_match_files) + len(must_match_links) + len(unsearchable_dirs)
     has_duplicates, duplicates = find_duplicates(output)
     expected_last_line = f'Done searching, found {len(must_match_links) + len(must_match_files)} files'
@@ -300,25 +303,24 @@ def assert_correct_results(must_match_files: List[str], must_match_links: List[s
             logging.error(f"Last line should have been `{expected_last_line}` but was `{output[-1]}`")
         if len(output) != total_matches + 1:
             logging.error("#######")
-            logging.info(f"program did not print correct number of lines (matches_amount + 1 = {total_matches + 1})")
+            logging.info(
+                f"program did not print correct number of lines (matches_amount + permission_denied_amount + 1 = {total_matches + 1})")
             missing_files = [f for f in must_match_files if f not in output]
             missing_links = [f for f in must_match_links if f not in output]
             missing_unsearchable_files = [f for f in unsearchable_dirs if
                                           f"Directory {f}: Permission denied." not in output]
             info_missing_all(missing_files, missing_links, missing_unsearchable_files)
             info_redundant_prints(output, must_match_files, must_match_links, unsearchable_dirs)
-
-            logging.error(
-                f"for search term {search_term}, should have printed {total_matches + 1} lines but printed {len(output)}:")
-            for line in output:
-                logging.info(line)
-            logging.error('----------------------------')
         if has_duplicates:
             logging.error("#######")
             logging.error(
                 f"Following lines have been printed more than once. First number is amount of times it was printed")
             for line, amt in duplicates.items():
                 logging.error(f"{amt}: {line}")
+        logging.error(
+            f"for search term {search_term}, should have printed {total_matches + 1} lines but printed {len(output)}:")
+        for line in original_output:
+            logging.info(line)
         logging.error('----------------------------')
         logging.error("test file system has still not been deleted, so you can run the command by yourself to debug.")
         logging.error(f"command is: {original_cmd}")
@@ -419,15 +421,21 @@ def test_bad_root_dir():
 
 def run_command(command, timeout: int = TIMEOUT_SECONDS) -> (bool, List[str]):
     logging.debug(f"running command: {command}")
+    proc = subprocess.Popen(shlex.split(command), stdout=subprocess.PIPE)
     try:
-        output = check_output(shlex.split(command), stderr=subprocess.STDOUT, timeout=timeout)
-        return True, output.strip().decode().split('\n')
-    except subprocess.CalledProcessError as e:
-        return False, e.output.strip().decode().split('\n')
+        output, error = proc.communicate(timeout=timeout)
+        if error is None and proc.returncode == 0:
+            return True, output.strip().decode().split('\n')
+        return False, output.strip().decode().split('\n')
     except subprocess.TimeoutExpired as e:
+        proc.kill()
+        output, error = proc.communicate()
         logging.error("--------------------------------------------")
         logging.error(
-            f"Process did not finish in expected timeout (maximum {TIMEOUT_SECONDS} seconds) so you probably have a deadlock")
+            f"Process did not finish in expected timeout (maximum {timeout} seconds) so you probably have a deadlock")
+        logging.error("Anyway, this is the output you generated until the deadlock:")
+        for line in output.strip().decode().split('\n'):
+            print(line)
         logging.error(f"Test FileSystem won't be reset until the next time you run the test.")
         logging.error(f"So you can rerun the command by yourself to debug: {command}")
         exit(1)
@@ -439,7 +447,7 @@ def run_all_tests(timeout: int):
 
     tests_amt = 0
     failed_amt = 0
-    for _ in range(20):
+    for _ in range(20 if IS_HARD else 10):
         total_normal, failed_normal = test_normal_run(timeout)
         total_links, failed_links = test_links_run(timeout)
         total_unsearchable, failed_unsearchable = test_unsearchable_dir_run(timeout)
@@ -476,5 +484,5 @@ def run(timeout_secs: int):
 
 
 if __name__ == '__main__':
-    timeout = int(sys.argv[1]) if len(sys.argv) > 1 else TIMEOUT_SECONDS
+    timeout = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[0].isnumeric() else TIMEOUT_SECONDS
     run(timeout)
