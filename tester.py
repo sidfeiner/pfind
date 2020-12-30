@@ -119,17 +119,17 @@ def generate_dir_names(max_leafs_amt: int, with_parents: bool, exclude_dirs: Lis
     exclude_dirs = exclude_dirs or []
     s = set()
     for _ in range(max_leafs_amt):
-        dir_name = generate_dir(random.randint(1, MAX_DEPTH))
-        while dir_name in exclude_dirs:
-            dir_name = generate_dir(random.randint(1, MAX_DEPTH))
+        dir_name = os.path.join(TEST_DIR, generate_dir(random.randint(1, MAX_DEPTH)))
+        while dir_name in exclude_dirs or dir_name in s:
+            dir_name = os.path.join(TEST_DIR, generate_dir(random.randint(1, MAX_DEPTH)))
         if with_parents:
             all_parents = get_all_dir_parents(dir_name)
             for parent in all_parents:
-                logging.debug(f"added {os.path.join(TEST_DIR, parent)} to dir names")
-                s.add(os.path.join(TEST_DIR, parent))
+                logging.debug(f"added {parent} to dir names")
+                s.add(parent)
         else:
-            logging.debug(f"added {os.path.join(TEST_DIR, dir_name)} to dir names")
-            s.add(os.path.join(TEST_DIR, dir_name))
+            logging.debug(f"added {dir_name} to dir names")
+            s.add(dir_name)
 
     return list(s)
 
@@ -163,7 +163,7 @@ def ensure_generate_filesystem(match_files_amt: int, search_term: str, with_link
     for _ in range(max_retries):
         try:
             return generate_filesystem(match_files_amt, search_term, with_link, with_unsearchable_dir)
-        except NotADirectoryError as e:
+        except Exception as e:
             logging.warning("failed creating file system, retrying (don't worry, this is not your fault).")
             reset_test_dir()
     raise RuntimeError("Tester failed generating file system. This is NOT your fault! Just re-run the tester")
@@ -181,7 +181,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
     unmatched_links = []
     matchable_in_unsearchable_files = []
 
-    def file_path_valid(_file_path: str):
+    def file_path_exists(_file_path: str):
         return not (
                 _file_path in dir_names or _file_path in match_files or _file_path in match_links or _file_path in unmatched_files or _file_path in unmatched_links or _file_path in unsearchable_dirs or _file_path in matchable_in_unsearchable_files)
 
@@ -192,7 +192,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
         logging.debug(f"picked random directory {file_dir}")
 
         file_path = generate_containing_word(file_dir, search_term)
-        while not file_path_valid(file_path):
+        while not file_path_exists(file_path):
             file_path = generate_containing_word(file_dir, search_term)
         if not with_link or 0 <= random.random() <= regular_file_proba:
             logging.debug(f"added {file_path} to match files")
@@ -208,7 +208,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
         # File generated MUSTN'T contain search term
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(file_dir, file_name))
-        while search_term in file_name or not file_path_valid(final_path):
+        while search_term in file_name or not file_path_exists(final_path):
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(file_dir, file_name))
         if not with_link or 0 <= random.random() <= regular_file_proba:
@@ -226,7 +226,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
     for unsearchable_dir in unsearchable_dirs:
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
-        while search_term in file_name or not file_path_valid(final_path):
+        while search_term in file_name or not file_path_exists(final_path):
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
         logging.debug(f"added {final_path} to matchable_in_unsearchable_files")
