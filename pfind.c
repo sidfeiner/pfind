@@ -318,7 +318,7 @@ void *threadMain(void *searchTerm) {
 
     pthread_mutex_unlock(&startLock);
     while (1) {
-        path = deQueue();
+        path = deQueue();  // deQueue will increase runnningThreads anyways (even if it returned NULL)
         if (path != NULL) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
