@@ -480,7 +480,7 @@ def run(timeout_secs: int):
         exit(1)
 
     start_ts = datetime.now()
-    tests_amt, failed_amt = run_all_tests(timeout)
+    tests_amt, failed_amt = run_all_tests(timeout_secs)
     end_ts = datetime.now()
 
     if failed_amt > 0:
@@ -495,5 +495,5 @@ def run(timeout_secs: int):
 
 
 if __name__ == '__main__':
-    timeout = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[0].isnumeric() else TIMEOUT_SECONDS
+    timeout = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isnumeric() else TIMEOUT_SECONDS
     run(timeout)

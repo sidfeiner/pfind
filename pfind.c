@@ -8,6 +8,16 @@
 #include <dirent.h>
 #include <stdatomic.h>
 
+#undef DEBUG
+
+#include <stdarg.h>
+
+#ifdef DEBUG
+
+#include <stdint.h>
+
+#endif
+
 #define T_UNKNOWN 0
 #define T_FILE 1
 #define T_DIR 2
@@ -30,17 +40,58 @@ typedef struct queue {
 Queue *queue;
 pthread_mutex_t startLock;
 pthread_mutex_t queueLock;
+pthread_mutex_t printLock;
+pthread_mutex_t isDoneLock;
 pthread_rwlock_t runningThreadsLock;
+pthread_rwlock_t createdThreadsLock;
+pthread_rwlock_t waitingThreadsLock;
 pthread_rwlock_t queueRWLock;
 
 int parallelism;
 pthread_cond_t queueConsumableCond;
 pthread_cond_t doneInitCond;
 atomic_int threadsSignaled;
-atomic_int createdProcesses;
+atomic_int createdThreads;
 atomic_int foundFiles;
 atomic_int runningThreads;
 atomic_int failedThreads;
+atomic_int waitingThreads;
+atomic_int programIsDone;
+
+long getNanoTs(void) {
+    struct timespec spec;
+    clock_gettime(CLOCK_REALTIME, &spec);
+    return (int64_t) (spec.tv_sec) * (int64_t) 1000000000 + (int64_t) (spec.tv_nsec);
+}
+
+char *debugFormat = "[%02x] : %lu : %d : %d : %d : ";
+char *debugLevel = "***";
+
+void debugPrintf(char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    char *placeholder = malloc(strlen(debugFormat) + strlen(debugLevel) + 1);
+    char *newFmt = malloc(strlen(debugLevel) + strlen(fmt) + 1);
+    snprintf(placeholder, strlen(debugFormat) + strlen(debugLevel) + 1, "%s%s", debugLevel, debugFormat);
+    snprintf(newFmt, strlen(debugLevel) + strlen(fmt) + 1, "%s%s", debugLevel, fmt);
+    pthread_mutex_lock(&printLock);
+    printf(placeholder, pthread_self(), getNanoTs(), runningThreads, waitingThreads, failedThreads);
+    vprintf(newFmt, args);
+    free(newFmt);
+    free(placeholder);
+    fflush(stdout);
+    pthread_mutex_unlock(&printLock);
+    va_end(args);
+}
+
+void safePrintf(char *fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    pthread_mutex_lock(&printLock);
+    vprintf(fmt, args);
+    pthread_mutex_unlock(&printLock);
+    va_end(args);
+}
 
 /**
  * Allocate memory for queue and initiate value
@@ -57,16 +108,6 @@ void initQueue() {
  */
 int unsafeGetQueueSize() {
     int size = queue->size;
-    return size;
-}
-
-/**
- * Safely return the amount of items in queue (lock only queue's size)
- */
-int getQueueSize() {
-    pthread_rwlock_rdlock(&queueRWLock);
-    int size = unsafeGetQueueSize();
-    pthread_rwlock_unlock(&queueRWLock);
     return size;
 }
 
@@ -90,31 +131,6 @@ char *unsafeDeQueue() {
     return value;
 }
 
-
-void incRunningThreads() {
-    pthread_rwlock_wrlock(&runningThreadsLock);
-    runningThreads++;
-    pthread_rwlock_unlock(&runningThreadsLock);
-}
-
-void decRunningThreads() {
-    pthread_rwlock_wrlock(&runningThreadsLock);
-    runningThreads--;
-    pthread_rwlock_unlock(&runningThreadsLock);
-}
-
-int unsafeGetRunningThreads() {
-    return runningThreads;
-}
-
-int getRunningThreads() {
-    pthread_rwlock_rdlock(&runningThreadsLock);
-    int res = unsafeGetRunningThreads();
-    pthread_rwlock_unlock(&runningThreadsLock);
-    return res;
-}
-
-
 /**
  * Returns if the thread is allowed to handle this item.
  * Returns true if:
@@ -125,7 +141,7 @@ int getRunningThreads() {
  *  Otherwise returns false
  */
 int unsafeIsAllowedToHandle() {
-    return parallelism == 1 || unsafeGetQueueSize() > 0 || (parallelism - getRunningThreads() - failedThreads - 1) == 0;
+    return parallelism == 1 || unsafeGetQueueSize() > 0 || waitingThreads == 0;
 }
 
 
@@ -149,11 +165,24 @@ void unsafeEnQueue(char *str) {
  *  Add item to queue
  */
 void enQueue(char *str) {
+
+#ifdef DEBUG
+    debugPrintf("locking queue for enqueueing queueRWLock (read/write)\n");
+#endif
     pthread_rwlock_wrlock(&queueRWLock);
+#ifdef DEBUG
+    debugPrintf("done locking queue for enqueueing queueRWLock (read/write)\n");
+#endif
     int isAllowedToHandle = unsafeIsAllowedToHandle();
     unsafeEnQueue(str);
+#ifdef DEBUG
+    debugPrintf("successfully inserted item to queue, now size is %d\n", unsafeGetQueueSize());
+#endif
     pthread_cond_signal(&queueConsumableCond);
     pthread_rwlock_unlock(&queueRWLock);
+#ifdef DEBUG
+    debugPrintf("unlocked queue for enqueueing (read/write).\n");
+#endif
     if (!isAllowedToHandle) {
         sched_yield();
     }
@@ -164,15 +193,30 @@ void enQueue(char *str) {
  * Safely pop and return first item in queue, NULL if empty
  */
 char *deQueue() {
-    pthread_mutex_lock(&queueLock);
-    while (unsafeGetQueueSize() == 0 && getRunningThreads() > 0) {
-        pthread_cond_wait(&queueConsumableCond, &queueLock);
+    pthread_mutex_lock(&isDoneLock);
+    waitingThreads++;
+    while (unsafeGetQueueSize() == 0 && waitingThreads < (parallelism - failedThreads) && !programIsDone) {
+#ifdef DEBUG
+        debugPrintf("locking for cond var dequeueing\n");
+#endif
+        pthread_cond_wait(&queueConsumableCond, &isDoneLock);
     }
-    pthread_mutex_unlock(&queueLock);
+    waitingThreads--;
+#ifdef DEBUG
+    debugPrintf("unlocking queue after cond var dequeueing\n");
+#endif
+    pthread_mutex_unlock(&isDoneLock);
+#ifdef DEBUG
+    debugPrintf("locking queue for dequeueing  queueRWLock(read/write)\n");
+#endif
     pthread_rwlock_wrlock(&queueRWLock);
-    incRunningThreads();
+    runningThreads++;
     char *path = unsafeDeQueue();
     pthread_rwlock_unlock(&queueRWLock);
+#ifdef DEBUG
+    debugPrintf("unlocked queue for dequeueing queueRWLock (read/write). Now size is %d, current item is: %p\n",
+                unsafeGetQueueSize(), path);
+#endif
     return path;
 }
 
@@ -276,14 +320,15 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
                 if (hasReadPermission(newPath)) {
                     enQueue(newPath);
                 } else {
-                    printf("Directory %s: Permission denied.\n", newPath);
+                    safePrintf("Directory %s: Permission denied.\n", newPath);
+                    free(newPath);
                 }
                 break;
             case T_LINK:
             case T_FILE:
                 if (strstr(entry->d_name, searchTerm) != NULL) {
                     foundFiles++;
-                    printf("%s\n", newPath);
+                    safePrintf("%s\n", newPath);
                 }
                 free(newPath);
                 break;
@@ -303,11 +348,9 @@ void handleEntry(char *dir, dirent *entry, char *searchTerm) {
 void handleDirectory(char *path, char *searchTerm) {
     DIR *dir;
     dirent *entry;
-
-
     // Open directory
     if ((dir = opendir(path)) == NULL) {
-        printf("Directory %s: Permission denied.\n", path);
+        safePrintf("Directory %s: Permission denied.\n", path);
         return;
     }
 
@@ -316,19 +359,26 @@ void handleDirectory(char *path, char *searchTerm) {
     while ((entry = readdir(dir)) != NULL) {
         handleEntry(path, entry, searchTerm);
     }
-
     // Close directory
     closedir(dir);
     if (errno != 0) {
-        printf("failed reading dir %s\n", path);
+        fprintf(stderr, "failed closing dir %s\n", path);
         killThread();
     }
 }
 
 int isDone() {
+#ifdef DEBUG
+    debugPrintf("(isDone) locking queue read lock queueRWLock\n");
+#endif
     pthread_rwlock_rdlock(&queueRWLock);
-    int isDone = unsafeGetQueueSize() == 0 && getRunningThreads() == 0;
+    int isDone = programIsDone == 1 ||
+                 (runningThreads == 0 && (waitingThreads == parallelism - 1 - failedThreads) &&
+                  unsafeGetQueueSize() == 0);
     pthread_rwlock_unlock(&queueRWLock);
+#ifdef DEBUG
+    debugPrintf("(isDone) unlocked queue read lock queueRWLock. will return %d\n", isDone);
+#endif
     return isDone;
 }
 
@@ -340,16 +390,25 @@ int isDone() {
 void *threadMain(void *searchTerm) {
     char *path;
     pthread_mutex_lock(&startLock);
-    createdProcesses++;
-    if (createdProcesses == parallelism) {
+    createdThreads++;
+    if (createdThreads == parallelism) {
+#ifdef DEBUG
+        debugPrintf("signaling doneInitCond\n");
+#endif
         pthread_cond_signal(&doneInitCond);
     }
 
     // For last thread, this line might be hit after main broadcasts to start, but it will stop waiting on one of the
     // following queueConsumableCond signals once a new item is added to the queue
+#ifdef DEBUG
+    debugPrintf("waiting for queueConsumableCond when createdThreads = %d\n", getCreatedThreads());
+#endif
     if (threadsSignaled == 0) {
         pthread_cond_wait(&queueConsumableCond, &startLock);
     }
+//#ifdef DEBUG
+//    debugPrintf("done waiting for queueConsumableCond\n");
+//#endif
     pthread_mutex_unlock(&startLock);
     while (1) {
         path = deQueue();
@@ -357,11 +416,18 @@ void *threadMain(void *searchTerm) {
             handleDirectory(path, (char *) searchTerm);
             free(path);
         }
-        decRunningThreads(); // Thread is done handling everything
+        runningThreads--; // Thread is done handling everything
+        pthread_mutex_lock(&isDoneLock);
         if (isDone()) {
+#ifdef DEBUG
+            debugPrintf("done going over all queue, broadcasting everyone to continue\n");
+#endif
+            programIsDone = 1;
             pthread_cond_broadcast(&queueConsumableCond);
+            pthread_mutex_unlock(&isDoneLock);
             break;
         }
+        pthread_mutex_unlock(&isDoneLock);
     }
     pthread_exit(NULL);
 }
@@ -371,7 +437,7 @@ void *threadMain(void *searchTerm) {
  */
 void initThreads(pthread_t **threads, char *searchTerm) {
     if ((*threads = malloc(sizeof(pthread_t) * parallelism)) == NULL) {
-        printf("failed allocating memory for threads\n");
+        fprintf(stderr, "failed allocating memory for threads\n");
         exit(1);
     }
 
@@ -396,10 +462,13 @@ void waitForThreads(pthread_t *threads) {
  * Init mutexes and condition variables
  */
 void initThreadingVars() {
-    pthread_mutex_init(&queueLock, NULL);
     pthread_mutex_init(&startLock, NULL);
+    pthread_mutex_init(&queueLock, NULL);
+    pthread_mutex_init(&isDoneLock, NULL);
     pthread_rwlock_init(&runningThreadsLock, NULL);
     pthread_rwlock_init(&queueRWLock, NULL);
+    pthread_rwlock_init(&createdThreadsLock, NULL);
+    pthread_rwlock_init(&waitingThreadsLock, NULL);
     pthread_cond_init(&queueConsumableCond, NULL);
     pthread_cond_init(&doneInitCond, NULL);
 }
@@ -408,10 +477,16 @@ void initThreadingVars() {
  * Destroy mutexes and condition variables
  */
 void destroyThreadingVars() {
+#ifdef DEBUG
+    pthread_mutex_destroy(&printLock);
+#endif
     pthread_mutex_destroy(&queueLock);
+    pthread_mutex_destroy(&isDoneLock);
     pthread_mutex_destroy(&startLock);
     pthread_rwlock_destroy(&runningThreadsLock);
     pthread_rwlock_destroy(&queueRWLock);
+    pthread_rwlock_destroy(&createdThreadsLock);
+    pthread_rwlock_destroy(&waitingThreadsLock);
     pthread_cond_destroy(&queueConsumableCond);
     pthread_cond_destroy(&doneInitCond);
 }
@@ -419,18 +494,21 @@ void destroyThreadingVars() {
 int main(int c, char *args[]) {
     char *rootDir, *searchTerm;
     pthread_t *threads;
+#ifdef DEBUG
+    pthread_mutex_init(&printLock, NULL);
+#endif
     if (c != 4) {
-        printf("wrong amount of arguments given\n");
+        fprintf(stderr, "wrong amount of arguments given\n");
     }
 
     if ((rootDir = parseRootDir(args[1])) == NULL) {
-        printf("first argument is not a valid directory\n");
+        fprintf(stderr, "first argument is not a valid directory\n");
         exit(1);
     }
 
     searchTerm = args[2];
     if (parseParallelism(args[3], &parallelism) < 0) {
-        printf("bad thread count given\n");
+        fprintf(stderr, "bad thread count given\n");
         exit(1);
     }
 
@@ -441,17 +519,26 @@ int main(int c, char *args[]) {
 
     // Wait for all threads to have been created and the start all threads
     pthread_mutex_lock(&startLock);
-    if (createdProcesses != parallelism) {
+    if (createdThreads != parallelism) {
+#ifdef DEBUG
+        debugPrintf("waiting for doneInitCond in main\n");
+#endif
         pthread_cond_wait(&doneInitCond, &startLock);
     }
+#ifdef DEBUG
+    debugPrintf("enqueuing root and broadcasting to start\n");
+#endif
     unsafeEnQueue(rootDir);
     pthread_cond_broadcast(&queueConsumableCond);
     threadsSignaled = 1;
     pthread_mutex_unlock(&startLock);
 
     // Wait for all threads to finish
+#ifdef DEBUG
+    debugPrintf("waiting for all threads to finish\n");
+#endif
     waitForThreads(threads);
-    printf("Done searching, found %d files\n", foundFiles);
+    safePrintf("Done searching, found %d files\n", foundFiles);
 
     // Cleanup our environment
     destroyThreadingVars();
