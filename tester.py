@@ -14,9 +14,17 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Dict
 
+DEBUG_LOG_FILE = './test-debug.log'
 IGNORE_DEBUG_PRINTS = True if '--ignore-debug-prints' in sys.argv else False
 IS_HARD = True if '--hard' in sys.argv else False
 logging.basicConfig(format="%(msg)s", stream=sys.stdout, level='DEBUG' if '--debug' in sys.argv else 'INFO')
+
+debug_logger = logging.getLogger("Debugger")
+file_handler =logging.FileHandler(DEBUG_LOG_FILE, mode='w')
+file_handler.setFormatter(logging.Formatter("%(asctime)s : %(levelname)s : %(message)s"))
+debug_logger.addHandler(file_handler)
+debug_logger.setLevel(logging.DEBUG)
+debug_logger.propagate = False
 
 TIMEOUT_SECONDS = 20
 PFIND_EXEC = "./pfind"
@@ -125,10 +133,10 @@ def generate_dir_names(max_leafs_amt: int, with_parents: bool, exclude_dirs: Lis
         if with_parents:
             all_parents = get_all_dir_parents(dir_name)
             for parent in all_parents:
-                logging.debug(f"added {parent} to dir names")
+                debug_logger.debug(f"added {parent} to dir names")
                 s.add(parent)
         else:
-            logging.debug(f"added {dir_name} to dir names")
+            debug_logger.debug(f"added {dir_name} to dir names")
             s.add(dir_name)
 
     return list(s)
@@ -144,7 +152,7 @@ def generate_containing_word(file_dir: str, search_term: str):
 def ensure_file_dir(path: str):
     """Receive path to file and ensure it's directory exists"""
     dir_name = os.path.dirname(path)
-    logging.debug(f"making dir {dir_name}")
+    debug_logger.debug(f"making dir {dir_name}")
     dir_path = Path(dir_name)
     dir_path.mkdir(parents=True, exist_ok=True)
     return dir_path
@@ -153,7 +161,7 @@ def ensure_file_dir(path: str):
 def touch_file(path: str):
     """Touches file and returns the directory it's in, as a Path"""
     dir_path = ensure_file_dir(path)
-    logging.debug(f"touching {path}")
+    debug_logger.debug(f"touching {path}")
     Path(path).touch()
     return dir_path
 
@@ -189,22 +197,22 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
     logging.info(f"creating {match_files_amt} files that should match")
     for _ in range(match_files_amt):
         file_dir = random.choice(dir_names)
-        logging.debug(f"picked random directory {file_dir}")
+        debug_logger.debug(f"picked random directory {file_dir}")
 
         file_path = generate_containing_word(file_dir, search_term)
         while not file_path_exists(file_path):
             file_path = generate_containing_word(file_dir, search_term)
         if not with_link or 0 <= random.random() <= regular_file_proba:
-            logging.debug(f"added {file_path} to match files")
+            debug_logger.debug(f"added {file_path} to match files")
             match_files.append(file_path)
         else:
-            logging.debug(f"added {file_path} to match links")
+            debug_logger.debug(f"added {file_path} to match links")
             match_links.append(file_path)
 
     logging.info(f"creating {files_amount - match_files_amt} files that will NOT match")
     for _ in range(files_amount - match_files_amt):
         file_dir = random.choice(dir_names)
-        logging.debug(f"picked random directory {file_dir}")
+        debug_logger.debug(f"picked random directory {file_dir}")
         # File generated MUSTN'T contain search term
         file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
         final_path = os.path.join(os.path.join(file_dir, file_name))
@@ -212,10 +220,10 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(file_dir, file_name))
         if not with_link or 0 <= random.random() <= regular_file_proba:
-            logging.debug(f"added {final_path} to unmatch files")
+            debug_logger.debug(f"added {final_path} to unmatch files")
             unmatched_files.append(final_path)
         else:
-            logging.debug(f"added {final_path} to unmatch links")
+            debug_logger.debug(f"added {final_path} to unmatch links")
             unmatched_links.append(final_path)
 
     logging.info(
@@ -229,7 +237,7 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
         while search_term in file_name or not file_path_exists(final_path):
             file_name = generate_word(random.randint(1, MAX_WORD_SIZE))
             final_path = os.path.join(os.path.join(unsearchable_dir, file_name))
-        logging.debug(f"added {final_path} to matchable_in_unsearchable_files")
+        debug_logger.debug(f"added {final_path} to matchable_in_unsearchable_files")
         matchable_in_unsearchable_files.append(final_path)
 
     logging.info("generating file system...")
@@ -239,21 +247,21 @@ def generate_filesystem(match_files_amt: int, search_term: str, with_link: bool,
     if with_link:
         logging.info("generating links...")
         for p in match_links + unmatched_links:
-            logging.debug(f"ensuring dir {p}...")
+            debug_logger.debug(f"ensuring dir {p}...")
             ensure_file_dir(p)
             target, is_dir = generate_link_target(match_files, unmatched_files)
-            logging.debug(f"creating symlink from {p} to {target}...")
+            debug_logger.debug(f"creating symlink from {p} to {target}...")
             Path(p).symlink_to(target, target_is_directory=is_dir)
     if with_unsearchable_dir:
         logging.info("generating unsearchable dirs...")
         for p in matchable_in_unsearchable_files:
             dir_path = touch_file(p)
-            logging.debug(f"remove read permission from {p}")
+            debug_logger.debug(f"remove read permission from {p}")
             cur_permission = stat.S_IMODE(os.lstat(dir_path).st_mode)
-            logging.debug(f"permission {dir_path} before: {cur_permission}")
+            debug_logger.debug(f"permission {dir_path} before: {cur_permission}")
             dir_path.chmod(cur_permission & ~stat.S_IRUSR)
             cur_permission = stat.S_IMODE(os.lstat(dir_path).st_mode)
-            logging.debug(f"permission {dir_path} after: {cur_permission}")
+            debug_logger.debug(f"permission {dir_path} after: {cur_permission}")
 
     logging.info("done generating filesystem.")
     return match_files, match_links, unsearchable_dirs
@@ -431,7 +439,7 @@ def test_bad_root_dir():
 
 
 def run_command(command, timeout: int = TIMEOUT_SECONDS) -> (bool, List[str]):
-    logging.debug(f"running command: {command}")
+    debug_logger.debug(f"running command: {command}")
     proc = subprocess.Popen(shlex.split(command), stdout=subprocess.PIPE)
     try:
         output, error = proc.communicate(timeout=timeout)
@@ -458,7 +466,7 @@ def run_all_tests(timeout: int):
 
     tests_amt = 0
     failed_amt = 0
-    for _ in range(20 if IS_HARD else 10):
+    for _ in range(30 if IS_HARD else 10):
         total_normal, failed_normal = test_normal_run(timeout)
         total_links, failed_links = test_links_run(timeout)
         total_unsearchable, failed_unsearchable = test_unsearchable_dir_run(timeout)

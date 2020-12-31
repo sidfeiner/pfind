@@ -171,11 +171,11 @@ int getTypeFromPath(char *path) {
  */
 int getTypeFromDirent(dirent *ent) {
     switch (ent->d_type) {
-        case 4:
+        case 4:  // DT_DIT
             return T_DIR;
-        case 8:
+        case 8:  // DT_FILE
             return T_FILE;
-        case 10:
+        case 10:  //DT_LINK
             return T_LINK;
         default:
             return T_UNKNOWN;
